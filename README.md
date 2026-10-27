@@ -25,7 +25,9 @@ Les modules ES nécessitent un serveur HTTP : GitHub Pages convient, ou en local
 2. **Chromatogrammes** : importer les `.ab1` Forward et Reverse, puis cliquer sur « Analyser ».
 3. **Lisibilité des lectures** : chaque lecture est classée « exploitable », « exploitable avec prudence » ou « illisible » (non localisée sur la référence, signal noyé dans le bruit, moins de la moitié des bases alignées…), avec la raison. Les lectures illisibles sont ignorées, et l’outil signale quand aucune lecture Forward ou Reverse n’est exploitable, puisqu’aucun variant ne peut alors être confirmé sur les deux brins.
 4. **Variants** : nomenclature `c.`, `p.` (prédite à partir du transcrit : faux-sens, non-sens, décalage du cadre `fs*N`, délétions/duplications en phase, `p.?` pour les sites d’épissage ±1/±2 et les indels qui chevauchent une jonction exon-intron) et `g.`. Le bouton « Fréquences gnomAD » convertit chaque variant en coordonnées GRCh38 (repérage de la référence NG_ sur le chromosome via Ensembl, normalisation à gauche façon VCF) et interroge gnomAD v4 (exomes + génomes). Il envoie le symbole du gène à Ensembl et les positions des variants à gnomAD, jamais les chromatogrammes. Si l’API gnomAD ne répond pas, chaque variant garde un lien vers sa page gnomAD.
-5. **Détail** : cliquer sur une ligne pour voir le contexte et le chromatogramme centré sur le variant. Les lignes Réf. / Allèle 1 / Allèle 2 sous les pics montrent la déconvolution. Export CSV disponible.
+5. **Tri** : un clic sur un en-tête du tableau des variants le trie (second clic : ordre inverse).
+6. **Rapport** : cocher les variants à inclure, les classer (classes ACMG 1 à 5 : bénin, probablement bénin, VUS, probablement pathogène, pathogène), renseigner l’échantillon et l’analyste. La conclusion est rédigée automatiquement (« Détection à l’état hétérozygote du variant pathogène NM_…:c.… p.… dans le gène … (classe 5). ») et reste modifiable. Le rapport comprend la région analysée, la lisibilité des lectures, une fiche par variant et une capture du chromatogramme centrée sur le variant pour chaque lecture qui le soutient. « Imprimer / PDF » ouvre l’impression du navigateur (choisir « Enregistrer au format PDF ») ; le rapport est produit localement.
+7. **Détail** : cliquer sur une ligne pour voir le contexte et le chromatogramme centré sur le variant. Les lignes Réf. / Allèle 1 / Allèle 2 sous les pics montrent la déconvolution. Export CSV disponible.
 
 Un jeu de démonstration entièrement synthétique est fourni dans `demo/` (gène fictif, `c.752dup` hétérozygote) : référence `demo/NG_DEMO.gb`, lectures `DEMO_F.ab1` et `DEMO_R.ab1`. Pour le régénérer : `node test/make-demo.js`.
 
@@ -79,5 +81,6 @@ src/reference.js          GenBank, RefSeqGene, NCBI E-utilities
 src/cache.js              mémoire locale des références (IndexedDB)
 src/protein.js            conséquence protéique (HGVS p.)
 src/gnomad.js             correspondance GRCh38 (Ensembl) et fréquences gnomAD v4
+src/report.js             classification ACMG et conclusion du rapport
 test/                     tests, simulateur de chromatogrammes, banc d'essai
 ```
