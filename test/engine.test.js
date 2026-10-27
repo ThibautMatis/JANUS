@@ -126,3 +126,32 @@ test('mauvaise référence : erreur explicite', () => {
   const other = buildReference({ accession: 'NG_OTHER.1', seq: randomSeq(5000, rng(9)) });
   assert.throws(() => analyzeRead(reads([])[0], other), /non localisée/);
 });
+
+test('grande délétion hétérozygote (53 nt, type MSH2 c.212-25_239del)', () => {
+  const g = 1990; // de l'intron 2 jusque dans l'exon 3
+  const { merged } = run([{ g, del: 53, ins: '' }]);
+  assert.equal(merged.length, 1, JSON.stringify(merged.map(m => m.names)));
+  assert.equal(merged[0].type, 'del');
+  assert.equal(merged[0].del.length, 53);
+  assert.equal(SEQ.slice(merged[0].pos, merged[0].pos + 53), merged[0].del);
+  assert.equal(merged[0].status, 'confirmé F/R');
+});
+
+test('lecture commençant dans la zone décalée : confirmation par le modèle', () => {
+  // Comme MSH2 Ex02F : les deux allèles partent de la même amorce, en amont de la délétion, mais les
+  // premières bases sont illisibles ; la partie exploitable commence au milieu de la délétion.
+  const g = 1990, L = 53;
+  const wt = amplicon(), mut = amplicon([{ g, del: L, ins: '' }]);
+  const full = simulate([wt.slice(120), mut.slice(120)], [0.5, 0.5], { seed: 5, length: 650 });
+  const F = { ...full, bases: full.bases.slice(45), positions: full.positions.slice(45), quality: full.quality.slice(45), name: 'F' };
+  const R = simulate([revcomp(wt).slice(20), revcomp(mut).slice(20)], [0.5, 0.5], { seed: 105, length: 700 });
+  R.name = 'R';
+  const results = [F, R].map(r => analyzeRead(r, REF));
+  assert.ok(results[0].partial, 'décalage détecté dès le début de la lecture Forward');
+  assert.equal(Math.abs(results[0].partial.ins.length - results[0].partial.del.length), L);
+  const merged = mergeCalls(results, REF);
+  assert.equal(merged.length, 1, JSON.stringify(merged.map(m => m.names)));
+  assert.equal(merged[0].names.g, `NG_TEST.1:g.${g}_${g + L - 1}del`);
+  assert.equal(merged[0].status, 'confirmé F/R');
+  assert.deepEqual(merged[0].supportedBy.map(s => s.name), ['F']);
+});

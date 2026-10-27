@@ -166,7 +166,7 @@ $('analyze').addEventListener('click', async () => {
     }
   }
   state.results = results;
-  state.merged = mergeCalls(results);
+  state.merged = mergeCalls(results, state.ref);
   renderReads();
   renderVariants();
   renderTraceSelect();
@@ -191,7 +191,8 @@ function renderReads() {
     cell(tr, regionLabel(r), 'mono');
     cell(tr, `${r.alignedBases} / ${r.usableBases}`);
     cell(tr, `${Math.round(100 * r.mixedFraction)} %`);
-    cell(tr, String(r.variants.length));
+    const shift = r.partial ? Math.abs(r.partial.ins.length - r.partial.del.length) : 0;
+    cell(tr, String(r.variants.length) + (shift ? ` · décalage de ${shift} nt dès le début de la lecture` : ''));
     body.append(tr);
   }
 }
@@ -223,7 +224,7 @@ function renderVariants() {
     const fractions = v.reads.map(x => x.alleleFraction).filter(Number.isFinite);
     cell(tr, fractions.length ? fractions.map(f => `${Math.round(100 * f)} %`).join(' / ') : '—');
     cell(tr, statusTag(v));
-    cell(tr, v.reads.map(x => `${x.name} (${x.strand})`).join(', '), 'mono');
+    cell(tr, [...v.reads.map(x => `${x.name} (${x.strand})`), ...v.supportedBy.map(x => `${x.name} (${x.strand}, par modélisation)`)].join(', '), 'mono');
     tr.addEventListener('click', () => {
       body.querySelectorAll('tr').forEach(x => x.classList.remove('selected'));
       tr.classList.add('selected');
@@ -248,7 +249,8 @@ function showVariant(v) {
     `Variant    ${left.toLowerCase()}${pad(v.ins)}${right.toLowerCase()}`,
     '',
     ...v.reads.map(x => `${x.name} (${x.strand}) : base ${x.readBase} · ${x.evidence}${Number.isFinite(x.alleleFraction) ? ` · fraction ${Math.round(100 * x.alleleFraction)} %` : ''}${x.flags.length ? ' · ' + x.flags.join(', ') : ''}`),
-    ...(v.missing.length ? [`Non appelé sur : ${v.missing.join(', ')} (couvre la position)`] : []),
+    ...v.supportedBy.map(x => `${x.name} (${x.strand}) : non appelé directement, mais signal nettement mieux expliqué avec ce variant (gain d’ajustement ${Math.round(x.gain)})`),
+    ...(v.missing.length ? [`Non retrouvé sur : ${v.missing.join(', ')} (lecture informative à cette position)`] : []),
   ].filter((l, i) => l !== '' || i > 2);
   const detail = $('variantDetail');
   detail.textContent = lines.join('\n');

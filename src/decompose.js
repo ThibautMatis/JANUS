@@ -9,8 +9,8 @@
 // 4. Séparation : à chaque position, allèle 1 = base de référence si présente, allèle 2 = l'autre pic.
 // 5. Alignement indépendant de chaque allèle sur la référence → SNV et indels exacts.
 
-import { alignLocal, alignStrings, kmerIndex, locate } from './align.js';
-import { DNA, revcomp } from './sequence.js';
+import { alignLocal, alignStrings, kmerIndex, locate, locateAmbiguous } from './align.js';
+import { DNA, revcomp, complement } from './sequence.js';
 import { peakProfile, reverseProfile, trimRange } from './peaks.js';
 import { normalize, variantKey, hgvsNames } from './hgvs.js';
 
@@ -23,6 +23,9 @@ export const DEFAULTS = {
   edge: 15,           // pas d'appel à moins de `edge` bases d'une extrémité de l'alignement
   snrMin: 4,          // pic secondaire d'un SNV ≥ snrMin × bruit de fond local
   minSignal: 0.08,    // signal minimal (fraction du pic primaire) pour corriger l'allèle 2
+  maxDeletion: 120,   // taille maximale des délétions recherchées au point de rupture (nt)
+  maxInsertion: 40,   // taille maximale des insertions recherchées (nt)
+  scanMinGain: 20,    // gain d'ajustement minimal pour retenir un indel trouvé par recherche du décalage
 };
 
 const h = (x, base) => x.h[DNA.indexOf(base)] ?? 0;
@@ -44,8 +47,17 @@ export function analyzeRead(read, ref, options = {}) {
   const fwd = trimmed.map(x => x.primary).join('');
   const index = referenceIndex(ref);
   const hitF = locate(fwd, index), hitR = locate(revcomp(fwd), index);
-  const reverse = (hitR?.votes || 0) > (hitF?.votes || 0);
-  const hit = reverse ? hitR : hitF;
+  let reverse = (hitR?.votes || 0) > (hitF?.votes || 0);
+  let hit = reverse ? hitR : hitF;
+  if (!hit || hit.votes < opt.minVotes) {
+    // Lecture mixte dès le début : les bases primaires alternent entre les deux allèles.
+    if (!ref._kmers10) ref._kmers10 = kmerIndex(ref.seq, 10);
+    const choices = trimmed.map(x => (x.ratio >= opt.ratio ? x.primary + x.secondary : x.primary));
+    const rc = choices.slice().reverse().map(c => [...c].map(b => complement(b)).join(''));
+    const aF = locateAmbiguous(choices, ref._kmers10), aR = locateAmbiguous(rc, ref._kmers10);
+    reverse = (aR?.votes || 0) > (aF?.votes || 0);
+    hit = reverse ? aR : aF;
+  }
   if (!hit || hit.votes < opt.minVotes) throw new Error(`${read.name} : lecture non localisée sur ${ref.accession} (mauvaise référence ou qualité insuffisante)`);
   const prof = reverse ? reverseProfile(trimmed) : trimmed;
   const winStart = Math.max(0, hit.diagonal - opt.pad);
@@ -99,7 +111,8 @@ export function analyzeRead(read, ref, options = {}) {
     }
   }
 
-  refitIndels(calls, { ref, winStart, seqCols, prof, reverse, opt });
+  const model = makeModel({ ref, winStart, winEnd, seqCols, prof, reverse });
+  const partial = refitIndels(calls, { ref, winStart, seqCols, prof, reverse, opt, model });
 
   const variants = [];
   for (const call of calls.values()) {
@@ -127,9 +140,14 @@ export function analyzeRead(read, ref, options = {}) {
     usableBases: prof.length,
     mixedFraction: seqCols.filter(c => c.mixed).length / Math.max(1, seqCols.length),
     winStart,
+    refSeq: ref.seq,
     cols,
     profile: prof,
     variants,
+    // Indel dont le point de rupture précède le début de la lecture : taille connue, position non.
+    partial: partial ? { ...partial, names: hgvsNames(partial, ref) } : null,
+    /** Score d'ajustement de la lecture sous l'hypothèse d'un allèle 2 portant `vars`. */
+    explain: vars => model.fit(vars, model.A, model.B),
   };
 }
 
@@ -196,25 +214,16 @@ function applyVariants(seq, vars, A, B) {
 }
 
 /**
- * Ré-ajustement des indels hétérozygotes de l'allèle 2. Près du point de rupture, la séparation
- * base par base peut décaler l'indel de quelques nucléotides, le fragmenter (indel + SNV voisins)
- * ou créer de petits couples délétion/insertion parasites en aval. Pour chaque groupe d'appels,
- * dans le sens de lecture, on teste : le groupe tel quel, son absence (bilan de longueur nul) et
- * tous les placements d'un indel unique de même bilan ; on garde l'allèle 2 prédit dont le
- * mélange avec l'allèle de référence reproduit le mieux les profils de pics mesurés.
+ * Modèle de mélange d'une lecture : l'allèle 1 suit la référence, l'allèle 2 porte des variants.
+ * fit(vars, lo, hi) mesure (score négatif) l'écart entre les profils de pics observés et le mélange
+ * attendu sur [lo, hi) de la référence. Les deux allèles partagent l'amorce : la k-ième base lue
+ * de l'allèle 2 se compte depuis l'extrémité de la fenêtre située du côté de l'amorce.
  */
-function refitIndels(calls, { ref, winStart, seqCols, prof, reverse, opt }) {
+function makeModel({ ref, winStart, winEnd, seqCols, prof, reverse }) {
+  const seq = ref.seq;
   const colOf = new Map();
   seqCols.forEach((c, i) => { if (c.t !== null) colOf.set(winStart + c.t, i); });
-  const nearestCol = g => {
-    for (let d = 0; d < 30; d++) {
-      if (colOf.has(g + d)) return colOf.get(g + d);
-      if (colOf.has(g - d)) return colOf.get(g - d);
-    }
-    return 0;
-  };
-  const seq = ref.seq;
-  const A = winStart, B = winStart + Math.max(...seqCols.map(c => c.t ?? 0)) + 1;
+  const A = winStart, B = winEnd;
   // Fraction de l'allèle 2, estimée sur les positions où les deux allèles diffèrent.
   const ratios = seqCols.filter(c => c.a1 !== c.a2).map(c => {
     const x = prof[c.q], a = h(x, c.a2), b = h(x, c.a1);
@@ -222,7 +231,6 @@ function refitIndels(calls, { ref, winStart, seqCols, prof, reverse, opt }) {
   }).sort((a, b) => a - b);
   const f = ratios.length ? Math.min(0.9, Math.max(0.1, ratios[Math.floor(ratios.length / 2)])) : 0.5;
 
-  // Écart (négatif) entre profils observés et mélange attendu, sur [lo, hi) de la référence.
   const fit = (vars, lo, hi) => {
     const alt = applyVariants(seq, vars, A, B);
     if (alt === null) return -Infinity;
@@ -230,7 +238,6 @@ function refitIndels(calls, { ref, winStart, seqCols, prof, reverse, opt }) {
     for (let t = Math.max(A, lo); t < Math.min(B, hi); t++) {
       const i = colOf.get(t);
       if (i === undefined) continue;
-      // Les deux allèles ont la même origine de lecture : on compte depuis le début de la lecture.
       const k = reverse ? alt.length - (B - t) : t - A;
       if (k < 0 || k >= alt.length) continue;
       const x = prof[seqCols[i].q], total = x.h.reduce((u, v) => u + v, 0) || 1;
@@ -242,6 +249,104 @@ function refitIndels(calls, { ref, winStart, seqCols, prof, reverse, opt }) {
     }
     return score;
   };
+  return { fit, colOf, f, A, B };
+}
+
+/**
+ * Recherche directe du décalage : aux points où le signal devient mixte (ou dès le début de la
+ * lecture), on teste toutes les délétions et insertions jusqu'à maxDeletion / maxInsertion nt et
+ * l'on garde celle qui explique le mieux les profils en aval. Indispensable pour les grands indels,
+ * que la séparation base par base fragmente en plusieurs petits appels.
+ */
+function scanShift({ ref, winStart, seqCols, reverse, opt, model, inferInsert }) {
+  const seq = ref.seq;
+  const cols = seqCols.filter(c => c.t !== null);
+  if (reverse) cols.reverse(); // sens de lecture
+  const n = cols.length;
+  if (n < 60) return null;
+  const sums = [0];
+  for (const c of cols) sums.push(sums.at(-1) + (c.mixed ? 1 : 0));
+  const mean = (a, b) => { a = Math.max(0, a); b = Math.min(n, b); return b > a ? (sums[b] - sums[a]) / (b - a) : 0; };
+
+  // Points de rupture candidats : saut de la proportion de pics mixtes (au plus 3, espacés).
+  const W = 25, jumps = [];
+  for (let j = 0; j + W <= n; j++) {
+    const post = mean(j, j + W), pre = j >= 10 ? mean(j - W, j) : 0;
+    // Le signal doit être propre avant la rupture : dans une zone déjà décalée, le gain d'un second
+    // indel serait mesuré contre un modèle faux (sans le premier).
+    if (post >= 0.35 && pre <= 0.3 && post - pre >= 0.25) jumps.push({ j, jump: post - pre, atStart: j < 10 });
+  }
+  jumps.sort((a, b) => b.jump - a.jump);
+  const points = [];
+  for (const p of jumps) {
+    if (points.every(q => Math.abs(q.j - p.j) > 20)) points.push(p);
+    if (points.length === 3) break;
+  }
+
+  let best = null;
+  for (const point of points) {
+    const g = winStart + cols[point.atStart ? 0 : point.j].t; // première position mixte (référence)
+    const [lo, hi] = reverse ? [g - 130, g + 21] : [g - 20, g + 131];
+    const base = model.fit([], lo, hi);
+    const tried = new Set();
+    const consider = v => {
+      if (!v || v.ins === null || v.pos < model.A + 1 || v.pos + v.del.length > model.B - 1 || /N/.test(v.ins)) return;
+      const nv = normalize(seq, v);
+      const key = variantKey(nv);
+      if (tried.has(key)) return;
+      tried.add(key);
+      const gain = model.fit([nv], lo, hi) - base;
+      if (!best || gain > best.gain) best = { variant: nv, gain, point, g };
+    };
+    for (let d = 1; d <= opt.maxDeletion; d++) {
+      // Lecture Forward : la rupture est au début de la délétion ; Reverse : à sa fin.
+      const start = reverse ? g - d + 1 : g;
+      for (let p = start - 8; p <= start + 8; p++) consider({ pos: p, del: seq.slice(p, p + d), ins: '' });
+      // Rupture avant la première base lue : la délétion peut chevaucher le début de la lecture.
+      // L'alignement a pu suivre l'un ou l'autre allèle (aucune zone propre pour trancher) : on teste
+      // aussi le cas symétrique, où l'allèle de référence apparaît comme une duplication de d nt.
+      if (point.atStart) {
+        for (let k = -8; k <= d; k++) {
+          const p = reverse ? g - d + 1 + k : g - k;
+          consider({ pos: p, del: seq.slice(p, p + d), ins: '' });
+        }
+        for (let p = (reverse ? g + d : g) - 8; p <= (reverse ? g + d : g) + 8; p++) consider({ pos: p, del: '', ins: seq.slice(p - d, p) });
+      }
+    }
+    for (let d = 1; d <= opt.maxInsertion; d++) {
+      for (let p = g - 8; p <= g + 8; p++) {
+        consider({ pos: p, del: '', ins: seq.slice(p - d, p) });
+        const ins = inferInsert(p, d);
+        if (ins) consider({ pos: p, del: '', ins });
+      }
+    }
+  }
+  if (!best || best.gain < opt.scanMinGain) return null;
+  // Rupture non observée : l'indel commence avant la première base lue (taille sûre, position non).
+  const v = best.variant, first = winStart + cols[0].t;
+  best.partial = best.point.atStart && (reverse ? v.pos + v.del.length >= first - 2 : v.pos <= first + 2);
+  return best;
+}
+
+/**
+ * Ré-ajustement des indels hétérozygotes de l'allèle 2. Près du point de rupture, la séparation
+ * base par base peut décaler l'indel de quelques nucléotides, le fragmenter (indel + SNV voisins)
+ * ou créer de petits couples délétion/insertion parasites en aval. On commence par la recherche
+ * directe du décalage (grands indels), puis, pour chaque groupe d'appels restant, dans le sens de
+ * lecture, on teste : le groupe tel quel, son absence et tous les placements d'un indel unique de
+ * même bilan ; on garde l'allèle 2 prédit qui reproduit le mieux les profils de pics mesurés.
+ * Retourne l'indel « partiel » éventuel (rupture avant le début de la lecture).
+ */
+function refitIndels(calls, { ref, winStart, seqCols, prof, reverse, opt, model }) {
+  const { fit, colOf, A, B } = model;
+  const nearestCol = g => {
+    for (let d = 0; d < 30; d++) {
+      if (colOf.has(g + d)) return colOf.get(g + d);
+      if (colOf.has(g - d)) return colOf.get(g - d);
+    }
+    return 0;
+  };
+  const seq = ref.seq;
   // Bases d'une insertion non dupliquée de longueur L en p, lues dans le signal.
   const inferInsert = (p, L) => {
     let s = '';
@@ -255,10 +360,35 @@ function refitIndels(calls, { ref, winStart, seqCols, prof, reverse, opt }) {
     }
     return s;
   };
+  const addCall = v => {
+    const key = variantKey(v);
+    const call = { ...v, key, alleles: [2], cols: [], refit: true, qFirst: nearestCol(v.pos), qAfter: nearestCol(v.pos + v.del.length) };
+    calls.set(key, call);
+    return call;
+  };
 
-  const het = [...calls.values()].filter(c => !c.alleles.includes(1)).sort((a, b) => (reverse ? b.pos - a.pos : a.pos - b.pos));
-  let pending = het.slice();
   const kept = [];
+  let partial = null;
+  const scan = scanShift({ ref, winStart, seqCols, reverse, opt, model, inferInsert });
+  if (scan) {
+    const v = scan.variant;
+    // Les appels de l'allèle 2 qui chevauchent l'indel trouvé en sont des fragments.
+    for (const c of [...calls.values()]) {
+      if (c.alleles.includes(1)) continue;
+      if (c.pos <= v.pos + v.del.length + 3 && c.pos + c.del.length >= v.pos - 3) calls.delete(c.key);
+    }
+    if (scan.partial) {
+      partial = { ...v, gain: scan.gain };
+      // Toute la lecture est décalée : les autres appels de l'allèle 2 ne sont pas interprétables.
+      for (const c of [...calls.values()]) if (!c.alleles.includes(1)) calls.delete(c.key);
+      kept.push(v);
+    } else {
+      kept.push(addCall(v));
+    }
+  }
+
+  const het = [...calls.values()].filter(c => !c.alleles.includes(1) && !kept.includes(c)).sort((a, b) => (reverse ? b.pos - a.pos : a.pos - b.pos));
+  let pending = het.slice();
   while (pending.length) {
     const seed = pending.find(c => c.type !== 'snv');
     if (!seed) break;
@@ -296,16 +426,18 @@ function refitIndels(calls, { ref, winStart, seqCols, prof, reverse, opt }) {
     }
     if (best.original) { kept.push(...cluster); continue; }
     for (const c of cluster) calls.delete(c.key);
-    for (const v of best.vars) {
-      const key = variantKey(v);
-      const call = {
-        ...v, key, alleles: [2], cols: [], refit: true,
-        qFirst: nearestCol(v.pos), qAfter: nearestCol(v.pos + v.del.length),
-      };
-      calls.set(key, call);
-      kept.push(call);
-    }
+    for (const v of best.vars) kept.push(addCall(v));
   }
+
+  // SNV de l'allèle 2 : conservés seulement s'ils améliorent l'ajustement, compte tenu des indels
+  // retenus (en aval d'un indel, les discordances de séparation imitent des SNV).
+  for (const c of [...calls.values()]) {
+    if (c.type !== 'snv' || c.alleles.includes(1)) continue;
+    const others = kept.filter(k => k !== c);
+    const gain = fit([...others, c], c.pos - 10, c.pos + 11) - fit(others, c.pos - 10, c.pos + 11);
+    if (gain < 1) calls.delete(c.key);
+  }
+  return partial;
 }
 
 /** Génotype, fraction allélique et contrôles de cohérence d'un appel. */
@@ -349,6 +481,9 @@ function assess(call, seqCols, prof, opt, reverse) {
       if (Math.min(alt, wt) < opt.snrMin * background) return null;
       out.alleleFraction = alt / Math.max(1, alt + wt);
       if (!call.alleles.includes(2)) out.flags.push('aucun allèle de référence');
+      // Pic secondaire de la même base que le voisin : possible traînée du pic adjacent.
+      const i = seqCols.indexOf(col);
+      if ([seqCols[i - 1], seqCols[i + 1]].some(c => c?.a1 === call.ins) && x.ratio < 0.6) out.flags.push('même base que le pic voisin (traînée possible)');
     }
     out.evidence = `rapport des pics ${x.ratio.toFixed(2)}`;
     return out;
@@ -388,24 +523,90 @@ function assess(call, seqCols, prof, opt, reverse) {
 }
 
 /**
- * Regroupe les appels de plusieurs lectures (ex. Forward + Reverse).
- * Un variant est « confirmé » s'il est appelé sur les deux brins.
+ * Forme « miroir » d'une délétion ou d'une duplication : quand une lecture commence dans la zone
+ * décalée, son alignement peut suivre l'allèle muté ; l'allèle de référence y apparaît alors comme
+ * l'indel inverse (une délétion de X se lit comme une duplication de X, et réciproquement).
  */
-export function mergeCalls(results) {
+function mirrorOf(v, seq) {
+  if (v.type === 'del') return normalize(seq, { pos: v.pos + v.del.length, del: '', ins: v.del });
+  if (v.type === 'dup') return normalize(seq, { pos: v.pos - v.ins.length, del: v.ins, ins: '' });
+  return null;
+}
+
+/**
+ * Le signal d'une lecture qui n'a pas appelé le variant est-il mieux expliqué avec lui ?
+ * Retourne le gain d'ajustement (forme directe ou miroir), ou null si la lecture n'est pas informative.
+ */
+function modelSupport(r, v, seq) {
+  const end = v.pos + v.del.length;
+  if (v.type === 'snv') {
+    if (r.refStart + 5 > v.pos + 1 || r.refEnd - 5 < v.pos + 1) return null;
+  } else if (r.strand === '+' ? r.refEnd < end + 20 : r.refStart > v.pos - 20) {
+    return null; // un indel ne se voit qu'en aval, dans le sens de lecture
+  }
+  const own = r.variants.filter(x => x.genotype === 'hétérozygote' && (x.pos + x.del.length < v.pos - 3 || x.pos > end + 3));
+  if (r.partial && v.type === 'snv') own.push(r.partial); // lecture entièrement décalée : le décalage fait partie du modèle
+  const base = r.explain(own);
+  const gains = [v, mirrorOf(v, seq)].filter(Boolean).map(x => r.explain([...own, x]) - base);
+  return Math.max(...gains);
+}
+
+/**
+ * Regroupe les appels de plusieurs lectures (ex. Forward + Reverse).
+ * Un variant est « confirmé F/R » s'il est appelé sur les deux brins, ou si l'autre brin, sans
+ * l'avoir appelé (lecture commençant dans la zone décalée, signal faible), est nettement mieux
+ * expliqué avec lui.
+ */
+export function mergeCalls(results, ref = null) {
   const merged = new Map();
   for (const r of results) {
     for (const v of r.variants) {
-      const m = merged.get(v.key) || { ...v, reads: [], strands: new Set() };
+      const m = merged.get(v.key) || { ...v, reads: [], strands: new Set(), supportedBy: [] };
       m.reads.push({ name: r.name, strand: r.strand, genotype: v.genotype, alleleFraction: v.alleleFraction, evidence: v.evidence, flags: v.flags, readBase: v.readBase, result: r });
       m.strands.add(r.strand);
       merged.set(v.key, m);
     }
   }
+  const seq = ref?.seq ?? results[0]?.refSeq;
+
+  // Placements concurrents d'un même indel (même bilan de longueur, à moins de 10 nt) : on garde celui
+  // qui explique le mieux l'ensemble des lectures informatives.
+  const net = v => v.ins.length - v.del.length;
+  const indels = [...merged.values()].filter(m => m.type !== 'snv');
+  for (const a of indels) {
+    if (!merged.has(a.key)) continue;
+    const rivals = indels.filter(b => merged.has(b.key) && net(b) === net(a) && Math.abs(b.pos - a.pos) <= 10);
+    if (rivals.length < 2 || !seq) continue;
+    const total = v => results.reduce((sum, r) => {
+      if (!r.explain || modelSupport(r, v, seq) === null) return sum;
+      const own = r.variants.filter(x => x.genotype === 'hétérozygote' && !rivals.some(rv => rv.key === x.key));
+      return sum + Math.max(...[v, mirrorOf(v, seq)].filter(Boolean).map(x => r.explain([...own, x])));
+    }, 0);
+    const scored = rivals.map(v => ({ v, score: total(v) })).sort((x, y) => y.score - x.score);
+    const winner = scored[0].v;
+    for (const { v } of scored.slice(1)) {
+      // Les lectures qui avaient choisi l'autre placement soutiennent le placement retenu.
+      for (const x of v.reads) {
+        if (!winner.reads.some(w => w.result === x.result)) {
+          winner.reads.push({ ...x, flags: [...x.flags, `placement initial ${x.result.variants.find(y => y.key === v.key)?.names.g.split(':')[1] ?? ''}`] });
+          winner.strands.add(x.strand);
+        }
+      }
+      merged.delete(v.key);
+    }
+  }
+
   const out = [];
   for (const m of merged.values()) {
-    // Lectures qui couvrent la position sans appeler le variant.
-    const covering = results.filter(r => r.refStart + 15 <= m.pos + 1 && r.refEnd - 15 >= m.pos + 1);
-    const missing = covering.filter(r => !m.reads.some(x => x.result === r));
+    const missing = [];
+    for (const r of results) {
+      if (m.reads.some(x => x.result === r)) continue;
+      const gain = seq && r.explain ? modelSupport(r, m, seq) : null;
+      if (gain === null) continue;
+      const strong = m.type === 'snv' ? 2 : 20;
+      if (gain >= strong) { m.supportedBy.push({ name: r.name, strand: r.strand, gain }); m.strands.add(r.strand); }
+      else if (gain <= -strong / 2 || m.type !== 'snv') missing.push(r);
+    }
     const genotypes = new Set(m.reads.map(x => x.genotype));
     out.push({
       ...m,
