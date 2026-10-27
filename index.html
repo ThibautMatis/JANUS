@@ -1,1 +1,95 @@
-<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SangerVariant · navigateur local</title><link rel="stylesheet" href="style.css"></head><body><header><h1>SVIB <small>V7 · modèle bi-allélique exploratoire · RefSeq NM_</small></h1><p>Analyse locale des chromatogrammes ABI — aucun fichier envoyé à un serveur.</p></header><main><section class="card"><h2>1 · Référence RefSeq</h2><p>Recherchez un gène humain, puis sélectionnez un transcrit RefSeq NM_ versionné. Seules les références publiques sont demandées à NCBI ; les fichiers ABI restent dans votre navigateur.</p><div class="controls"><label>Gène <input id="gene" value="BRCA2" placeholder="BRCA2, PTEN, TP53…" autocomplete="off"></label><button id="searchgene" type="button">Rechercher les NM_</button><label>Transcrit <select id="transcripts"><option value="">Recherchez un gène…</option></select></label><button id="loadtranscript" type="button">Charger le transcrit</button></div><p class="note">Recherche NCBI limitée à 200 résultats par requête ; pour un transcrit absent de la liste, saisissez son accession.version exacte ci-dessous. La disponibilité dépend de l'accès à NCBI depuis votre navigateur.</p><div class="controls"><label>Accession directe <input id="accession" value="NM_000059.4" placeholder="NM_000059.4"></label><button id="loadaccession" type="button">Charger cet NM_</button></div><div id="refstatus" class="status" aria-live="polite">Aucune référence chargée.</div><details><summary>Référence manuelle (secours hors connexion)</summary><p class="note">Importer un FASTA NM_ exact permet l'alignement ; les coordonnées c. ne sont disponibles qu'avec une annotation CDS vérifiée.</p><input id="fasta" type="file" accept=".fa,.fasta,.fna,.txt"><textarea id="refpaste" placeholder=">NM_000059.4&#10;ACGT…"></textarea><button id="loadref" type="button">Charger le FASTA</button><label>Début CDS (1-based, uniquement si vérifié dans RefSeq) <input id="cdsstart" type="number" min="1" placeholder="Non renseigné"></label></details></section><section class="card"><h2>2 · Chromatogrammes</h2><label>Forward (.ab1) <input id="forward" type="file" accept=".ab1,.abi"></label><label>Reverse (.ab1) <input id="reverse" type="file" accept=".ab1,.abi"></label><button id="analyze">Lire et analyser localement</button><div id="status" class="status">En attente de fichiers</div></section><section class="card"><h2>3 · Visualisation</h2><div class="controls"><label>Lecture <select id="readselect"></select></label><label>Base de départ <input id="start" type="number" min="1" value="1"></label><label>Nombre de bases <input id="count" type="number" min="10" max="120" value="45"></label><button id="draw">Afficher</button><button id="zoomout" type="button">Dézoomer</button><button id="resetview" type="button">Vue complète</button></div><p class="note">Glisser horizontalement pour naviguer · double-cliquer pour zoomer autour du pic · bouton Dézoomer pour reculer · molette pour zoomer/dézoomer.</p><canvas id="trace" width="1200" height="350" style="touch-action:none;cursor:grab"></canvas><div id="baseinfo" class="status">Cliquez sur un pic pour consulter ses coordonnées.</div></section><section class="card"><h2>4 · Alignement et observations</h2><p class="note">Alignement local approximatif des bases appelées. Les signaux mixtes après un indel hétérozygote ne sont pas déconvolués. Les discordances ne sont <strong>pas</strong> des appels de variants validés.</p><div id="alignments"></div><h3>V7 · Analyse indépendante du signal Forward / Reverse</h3><p class="note">Chaque ABI est ajusté séparément à la référence, à partir des quatre canaux de fluorescence. Recherche exploratoire d’une transition et d’un mélange de deux séquences décalées de 1 à 20 nt. Les séquences secondaires sont des estimations guidées par la référence, et non une déconvolution validée.</p><button id="v7scan" type="button">Explorer les signaux F et R</button> <button id="v7export" type="button">Exporter les régions (CSV)</button><div id="v7status" class="status" aria-live="polite">Analyse non lancée.</div><div class="scroll"><table><thead><tr><th>Lecture</th><th>Base ABI approx.</th><th>Position NM_ approx.</th><th>Décalage acquisition</th><th>Gain non calibré</th><th>Fraction modèle</th></tr></thead><tbody id="v7rows"></tbody></table></div><pre id="v7detail" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre><h3>Discordances indicatives (SNV uniquement)</h3><div class="scroll"><table><thead><tr><th>Lecture</th><th>Base AB1</th><th>Position référence (1-based)</th><th>Réf.</th><th>Observé</th><th>HGVS c. indicatif</th></tr></thead><tbody id="variants"></tbody></table></div><button id="export">Exporter les discordances (CSV)</button><p class="warning">⚠ Prototype de recherche, non validé pour le diagnostic. Ne concluez pas à l'absence de variant si la table est vide. La V7 est exploratoire : elle ne reconstruit pas de novo les allèles, ne confirme aucun variant et ne produit pas de nomenclature HGVS d’indel.</p></section></main><footer>100 % JavaScript local · aucun CDN ni analytics ; requêtes NCBI pour références publiques uniquement · vérifier la politique de sécurité du navigateur et de l'hébergeur.</footer><script src="app.js?v=7.0"></script><script src="v7-engine.js?v=7.0"></script></body></html>
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src https://eutils.ncbi.nlm.nih.gov; img-src 'self' data:; style-src 'self'; script-src 'self'">
+  <title>SVIB · variants Sanger</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <h1>SVIB <small>v8 · déconvolution d’allèles Sanger</small></h1>
+      <p>Appel de SNV et d’indels hétérozygotes sur chromatogrammes .ab1, sur référence génomique RefSeqGene. Les fichiers restent dans votre navigateur.</p>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="card" id="step-ref">
+      <h2><span class="num">1</span> Référence génomique</h2>
+      <p class="note">Les lectures Sanger sur ADN génomique couvrent exons et introns : l’analyse se fait sur l’enregistrement RefSeqGene (NG_) du gène, et le transcrit NM_ sert aux coordonnées c.</p>
+      <div class="controls">
+        <label>Gène <input id="gene" value="BRCA2" placeholder="BRCA2, TP53…" autocomplete="off" spellcheck="false"></label>
+        <button id="searchGene" type="button">Rechercher</button>
+        <label>RefSeqGene <select id="ngSelect"><option value="">—</option></select></label>
+      </div>
+      <div class="controls">
+        <label>Accession NG_ <input id="ngAccession" placeholder="NG_012772.3" spellcheck="false"></label>
+        <button id="loadNg" type="button">Charger</button>
+        <label>Transcrit <select id="nmSelect" disabled><option value="">Chargez d’abord un NG_</option></select></label>
+        <button id="useTranscript" type="button" disabled>Utiliser ce transcrit</button>
+      </div>
+      <details>
+        <summary>Sans connexion à NCBI : fichier GenBank ou FASTA local</summary>
+        <p class="note">Un fichier GenBank NG_ (téléchargé depuis NCBI, format « GenBank (full) ») conserve les exons et le CDS. Un FASTA ne permet que la nomenclature g.</p>
+        <div class="controls">
+          <label>Fichier <input id="refFile" type="file" accept=".gb,.gbk,.genbank,.txt,.fa,.fasta,.fna"></label>
+          <button id="loadRefFile" type="button">Charger le fichier</button>
+        </div>
+      </details>
+      <div id="refStatus" class="status" aria-live="polite">Aucune référence chargée.</div>
+    </section>
+
+    <section class="card" id="step-reads">
+      <h2><span class="num">2</span> Chromatogrammes</h2>
+      <div class="controls">
+        <label>Fichiers .ab1 (Forward et Reverse) <input id="abFiles" type="file" accept=".ab1,.abi,.abif" multiple></label>
+        <button id="analyze" type="button" class="primary">Analyser</button>
+      </div>
+      <details>
+        <summary>Paramètres</summary>
+        <div class="controls">
+          <label>Rapport secondaire / primaire minimal <input id="optRatio" type="number" min="0.05" max="0.9" step="0.05" value="0.25"></label>
+          <label>Signal minimal pour l’allèle 2 <input id="optSignal" type="number" min="0.02" max="0.5" step="0.01" value="0.08"></label>
+          <label>Rapport signal / bruit d’un SNV <input id="optSnr" type="number" min="1" max="20" step="0.5" value="4"></label>
+        </div>
+      </details>
+      <div id="readStatus" class="status" aria-live="polite">En attente de fichiers.</div>
+      <div class="scroll"><table id="readTable" hidden>
+        <thead><tr><th>Lecture</th><th>Brin</th><th>Région</th><th>Bases alignées</th><th>Pics mixtes</th><th>Variants</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </section>
+
+    <section class="card" id="step-results">
+      <h2><span class="num">3</span> Variants</h2>
+      <div class="scroll"><table id="variantTable">
+        <thead><tr><th>HGVS c.</th><th>HGVS g.</th><th>Type</th><th>Génotype</th><th>Fraction</th><th>Statut</th><th>Lectures</th></tr></thead>
+        <tbody><tr><td colspan="7" class="empty">Aucune analyse.</td></tr></tbody>
+      </table></div>
+      <div class="controls">
+        <button id="exportCsv" type="button" disabled>Exporter (CSV)</button>
+      </div>
+      <pre id="variantDetail" class="detail" hidden></pre>
+    </section>
+
+    <section class="card" id="step-trace">
+      <h2><span class="num">4</span> Chromatogramme</h2>
+      <div class="controls">
+        <label>Lecture <select id="traceRead"></select></label>
+        <button id="zoomIn" type="button" class="ghost">Zoom +</button>
+        <button id="zoomOut" type="button" class="ghost">Zoom −</button>
+        <button id="zoomAll" type="button" class="ghost">Vue complète</button>
+      </div>
+      <canvas id="trace"></canvas>
+      <p class="note">Glisser pour se déplacer, molette ou double-clic pour zoomer, clic sur un pic pour ses coordonnées. Lignes du bas : référence, allèle 1 (référence) et allèle 2 reconstruits, dans le sens de la lecture.</p>
+      <div id="baseInfo" class="status">—</div>
+    </section>
+
+    <p class="warning">⚠ Outil de recherche, non validé pour le diagnostic. Tout variant doit être confirmé visuellement sur le chromatogramme et par une méthode validée. L’absence d’appel n’exclut pas un variant (allèle minoritaire &lt; 20–25 %, extrémités de lecture, régions répétées, indels hétérozygotes composites).</p>
+  </main>
+  <footer>SVIB · JavaScript local, sans dépendance · seules des requêtes de références publiques sont envoyées à NCBI.</footer>
+  <script type="module" src="src/app.js"></script>
+</body>
+</html>
