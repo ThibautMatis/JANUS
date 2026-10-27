@@ -1,3 +1,5 @@
+<img src="img/janus-logo.png" alt="JANUS — Sanger deconvolution & variant calling" height="90">
+
 # JANUS — *Joint Allele aNalysis Using Sanger*
 
 **v0.8 · 27 octobre 2026**

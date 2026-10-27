@@ -6,11 +6,19 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src https://eutils.ncbi.nlm.nih.gov https://rest.ensembl.org https://gnomad.broadinstitute.org; img-src 'self' data:; style-src 'self'; script-src 'self'">
   <title>JANUS · variants Sanger</title>
   <link rel="stylesheet" href="style.css">
+  <link rel="icon" type="image/png" sizes="32x32" href="img/favicon-32.png">
+  <link rel="apple-touch-icon" href="img/icon-192.png">
 </head>
 <body>
   <header>
     <div class="wrap">
-      <h1>JANUS <small><span id="release">v0.8 · 27 octobre 2026</span> · déconvolution d’allèles Sanger</small></h1>
+      <h1 class="brand">
+        <picture>
+          <source srcset="img/janus-logo-dark.png" media="(prefers-color-scheme: dark)">
+          <img src="img/janus-logo.png" alt="JANUS — Sanger deconvolution &amp; variant calling" width="590" height="160">
+        </picture>
+        <small id="release">v0.8 · 27 octobre 2026</small>
+      </h1>
       <p>Appel de SNV et d’indels hétérozygotes sur chromatogrammes .ab1, sur référence génomique RefSeqGene. Les fichiers restent dans votre navigateur.</p>
     </div>
   </header>

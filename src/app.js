@@ -639,6 +639,7 @@ function renderReportPreview() {
     : [el('p', {}, 'Aucun variant retenu.')];
 
   view.replaceChildren(
+    el('img', { class: 'report-logo', src: 'img/janus-logo.png', alt: 'JANUS' }),
     el('h1', {}, `Analyse par séquençage Sanger — gène ${gene}`),
     el('p', { class: 'meta' }, [
       $('repSample').value.trim() ? `Échantillon : ${$('repSample').value.trim()}` : null,
