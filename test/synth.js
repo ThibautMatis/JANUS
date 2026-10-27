@@ -46,7 +46,7 @@ export function simulate(alleles, fractions, { spacing = 12, sigma = 2.6, noise 
   return { bases, positions, traces, quality: positions.map(() => 30), order: 'GATC', sample: 'synthetique' };
 }
 
-/** Écrit un fichier ABIF minimal (tags lus par SVIB). */
+/** Écrit un fichier ABIF minimal (tags lus par JANUS). */
 export function writeABIF({ bases, positions, traces, quality, order = 'GATC', sample = '' }) {
   const entries = [];
   const enc = s => Uint8Array.from(s, c => c.charCodeAt(0));

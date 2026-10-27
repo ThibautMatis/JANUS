@@ -29,7 +29,7 @@ for (let i = 0; i < seq.length; i += 60) {
   origin.push(String(i + 1).padStart(9) + ' ' + chunk);
 }
 const gb = `LOCUS       NG_DEMO               ${seq.length} bp    DNA     linear   SYN 01-JAN-2026
-DEFINITION  Gène fictif DEMO1, séquence aléatoire pour démonstration de SVIB.
+DEFINITION  Gène fictif DEMO1, séquence aléatoire pour démonstration de JANUS.
 ACCESSION   NG_DEMO
 VERSION     NG_DEMO.1
 FEATURES             Location/Qualifiers

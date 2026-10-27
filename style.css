@@ -31,10 +31,12 @@
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 Inter, "Segoe UI", system-ui, sans-serif; }
 .wrap { max-width: 1150px; margin: 0 auto; padding: 0 16px; }
-header { background: var(--header); color: #fff; padding: 22px 0; }
+header { background: var(--card); color: var(--text); padding: 18px 0 16px; border-bottom: 1px solid var(--border); }
 header h1 { margin: 0 0 6px; font-size: 27px; }
-header h1 small { font-size: 13px; font-weight: 400; color: #a9d8e7; }
-header p { margin: 0; color: #d2e7f0; }
+header h1 small { font-size: 13px; font-weight: 400; color: var(--muted); }
+header p { margin: 0; color: var(--muted); }
+.brand { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 6px 16px; }
+.brand img { display: block; height: 72px; width: auto; max-width: 100%; }
 main { padding: 18px 16px 8px; }
 .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin: 16px 0; }
 h2 { margin: 0 0 10px; font-size: 19px; display: flex; align-items: center; gap: 10px; }
@@ -76,7 +78,7 @@ footer { text-align: center; color: var(--muted); padding: 18px 16px 28px; font-
 @media (max-width: 600px) {
   .card { padding: 14px; }
   canvas#trace { height: 300px; }
-  header h1 { font-size: 22px; }
+  .brand img { height: 52px; }
 }
 a { color: var(--accent); }
 td.mono { white-space: nowrap; }
@@ -93,6 +95,7 @@ textarea { font: inherit; color: inherit; background: var(--card); width: 100%; 
 /* Aperçu du rapport : toujours sur fond blanc, comme imprimé. */
 .report { margin-top: 18px; background: #fff; color: #17293a; border: 1px solid var(--border); border-radius: 8px; padding: 28px 32px; font-size: 13.5px; line-height: 1.45; }
 .report h1 { font-size: 20px; margin: 0 0 4px; color: #12334d; }
+.report .report-logo { height: 42px; width: auto; display: block; margin-bottom: 14px; }
 .report h2 { font-size: 15px; margin: 22px 0 8px; color: #12334d; border-bottom: 1px solid #d9e3eb; padding-bottom: 4px; display: block; }
 .report h3 { font-size: 14px; margin: 14px 0 6px; }
 .report .meta { color: #5a6d7d; margin: 0; }
