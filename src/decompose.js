@@ -26,6 +26,7 @@ export const DEFAULTS = {
   maxDeletion: 120,   // taille maximale des délétions recherchées au point de rupture (nt)
   maxInsertion: 40,   // taille maximale des insertions recherchées (nt)
   scanMinGain: 20,    // gain d'ajustement minimal pour retenir un indel trouvé par recherche du décalage
+  scanMinConcordance: 0.6, // part des pics mixtes expliqués par la séquence décalée
 };
 
 const h = (x, base) => x.h[DNA.indexOf(base)] ?? 0;
@@ -129,6 +130,7 @@ export function analyzeRead(read, ref, options = {}) {
   variants.sort((a, b) => a.pos - b.pos);
 
   const alignedRef = profAln.ops.filter(o => o.op !== 'I');
+  const quality = readQuality({ read, fullProfile, prof, t0, t1, alignedBases: profAln.ops.filter(o => o.op !== 'D').length, seqCols, partial, variants });
   return {
     name: read.name,
     read,
@@ -137,6 +139,7 @@ export function analyzeRead(read, ref, options = {}) {
     refStart: winStart + (alignedRef[0]?.t ?? 0) + 1,
     refEnd: winStart + (alignedRef.at(-1)?.t ?? 0) + 1,
     alignedBases: profAln.ops.filter(o => o.op !== 'D').length,
+    quality,
     usableBases: prof.length,
     mixedFraction: seqCols.filter(c => c.mixed).length / Math.max(1, seqCols.length),
     winStart,
@@ -149,6 +152,34 @@ export function analyzeRead(read, ref, options = {}) {
     /** Score d'ajustement de la lecture sous l'hypothèse d'un allèle 2 portant `vars`. */
     explain: vars => model.fit(vars, model.A, model.B),
   };
+}
+
+const median = a => { const b = a.slice().sort((x, y) => x - y); return b.length ? b[Math.floor(b.length / 2)] : 0; };
+
+/**
+ * Lisibilité d'une lecture : longueur exploitable, part alignée sur la référence, rapport signal / bruit
+ * (pic primaire / 3e canal, insensible aux doubles pics d'un hétérozygote) et qualité du basecaller.
+ * Les pics mixtes expliqués par un indel hétérozygote ne pénalisent pas la lecture.
+ */
+function readQuality({ read, fullProfile, prof, t0, t1, alignedBases, seqCols, partial, variants }) {
+  const usable = t1 - t0;
+  const alignedFraction = alignedBases / Math.max(1, prof.length);
+  const snr = median(prof.map(x => x.h.slice().sort((a, b) => b - a)[0])) / Math.max(1, median(prof.map(x => x.h.slice().sort((a, b) => b - a)[2])));
+  const q = read.quality?.length ? read.quality.slice(t0, t1) : [];
+  const meanQ = q.length ? q.reduce((a, b) => a + b, 0) / q.length : null;
+  const mixed = seqCols.filter(c => c.mixed).length / Math.max(1, seqCols.length);
+  const explained = Boolean(partial) || variants.some(v => v.type !== 'snv' && v.genotype === 'hétérozygote');
+  const reasons = [];
+  let verdict = 'bonne';
+  const worse = (level, why) => { reasons.push(why); if (level === 'illisible' || verdict === 'bonne') verdict = level; };
+  if (alignedFraction < 0.5) worse('illisible', `${Math.round(100 * alignedFraction)} % des bases alignées sur la référence`);
+  else if (alignedFraction < 0.85) worse('médiocre', `${Math.round(100 * alignedFraction)} % des bases alignées`);
+  if (snr < 3) worse('illisible', `signal noyé dans le bruit (signal/bruit ${snr.toFixed(1)})`);
+  else if (snr < 10) worse('médiocre', `signal/bruit faible (${snr.toFixed(1)})`);
+  if (usable < 100) worse('médiocre', `seulement ${usable} bases exploitables`);
+  if (mixed > 0.35 && !explained) worse('médiocre', `${Math.round(100 * mixed)} % de pics mixtes sans indel pour les expliquer (bruit, contamination ou mélange d'amplicons ?)`);
+  if (meanQ !== null && meanQ < 15 && !explained) worse('médiocre', `qualité moyenne du basecaller Q${Math.round(meanQ)}`);
+  return { verdict, reasons, usable, total: fullProfile.length, alignedFraction, snr, meanQ, mixed };
 }
 
 const ALLELE_SCORES = { match: 3, mismatch: -4, gapOpen: -8, gapExtend: -2 };
@@ -249,7 +280,16 @@ function makeModel({ ref, winStart, winEnd, seqCols, prof, reverse }) {
     }
     return score;
   };
-  return { fit, colOf, f, A, B };
+  /** Base prédite de l'allèle 2 en face de la position de référence t (0-based), ou null. */
+  const predict = vars => {
+    const alt = applyVariants(seq, vars, A, B);
+    return t => {
+      if (alt === null) return null;
+      const k = reverse ? alt.length - (B - t) : t - A;
+      return k >= 0 && k < alt.length ? alt[k] : null;
+    };
+  };
+  return { fit, predict, colOf, f, A, B };
 }
 
 /**
@@ -258,7 +298,7 @@ function makeModel({ ref, winStart, winEnd, seqCols, prof, reverse }) {
  * l'on garde celle qui explique le mieux les profils en aval. Indispensable pour les grands indels,
  * que la séparation base par base fragmente en plusieurs petits appels.
  */
-function scanShift({ ref, winStart, seqCols, reverse, opt, model, inferInsert }) {
+function scanShift({ ref, winStart, seqCols, prof, reverse, opt, model, inferInsert }) {
   const seq = ref.seq;
   const cols = seqCols.filter(c => c.t !== null);
   if (reverse) cols.reverse(); // sens de lecture
@@ -296,7 +336,7 @@ function scanShift({ ref, winStart, seqCols, reverse, opt, model, inferInsert })
       if (tried.has(key)) return;
       tried.add(key);
       const gain = model.fit([nv], lo, hi) - base;
-      if (!best || gain > best.gain) best = { variant: nv, gain, point, g };
+      if (!best || gain > best.gain) best = { variant: nv, gain, point, g, lo, hi };
     };
     for (let d = 1; d <= opt.maxDeletion; d++) {
       // Lecture Forward : la rupture est au début de la délétion ; Reverse : à sa fin.
@@ -322,6 +362,22 @@ function scanShift({ ref, winStart, seqCols, reverse, opt, model, inferInsert })
     }
   }
   if (!best || best.gain < opt.scanMinGain) return null;
+  // Concordance : là où l'indel rend les deux allèles différents et où le signal est mixte, les deux
+  // premiers pics doivent être la base de référence et la base décalée prédite. Une contamination ou
+  // un mélange d'amplicons donne aussi des pics mixtes, mais sans cette correspondance.
+  const at = model.predict([best.variant]);
+  let agree = 0, informative = 0;
+  for (const c of cols) {
+    const t = winStart + c.t, alt = at(t);
+    // Sur toute la lecture (pas seulement la zone d'ajustement) : un vrai décalage explique les pics
+    // mixtes jusqu'au bout, une contamination seulement par endroits, au gré du meilleur candidat.
+    if (!c.mixed || !alt || alt === seq[t]) continue;
+    const x = prof[c.q];
+    informative++;
+    if (x.primary === alt || x.secondary === alt) agree++;
+  }
+  best.concordance = informative ? agree / informative : 0;
+  if (informative < 20 || best.concordance < opt.scanMinConcordance) return null;
   // Rupture non observée : l'indel commence avant la première base lue (taille sûre, position non).
   const v = best.variant, first = winStart + cols[0].t;
   best.partial = best.point.atStart && (reverse ? v.pos + v.del.length >= first - 2 : v.pos <= first + 2);
@@ -369,7 +425,7 @@ function refitIndels(calls, { ref, winStart, seqCols, prof, reverse, opt, model 
 
   const kept = [];
   let partial = null;
-  const scan = scanShift({ ref, winStart, seqCols, reverse, opt, model, inferInsert });
+  const scan = scanShift({ ref, winStart, seqCols, prof, reverse, opt, model, inferInsert });
   if (scan) {
     const v = scan.variant;
     // Les appels de l'allèle 2 qui chevauchent l'indel trouvé en sont des fragments.

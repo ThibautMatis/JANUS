@@ -23,7 +23,9 @@ Les modules ES nécessitent un serveur HTTP : GitHub Pages convient, ou en local
 
 1. **Référence** : taper le symbole du gène (ex. `BRCA2`) puis cliquer sur « Charger ». L’outil trouve le RefSeqGene du gène (NG_012772.3 pour BRCA2) et présélectionne le transcrit de référence (MANE Select s’il est signalé, sinon le premier décrit). Les références déjà utilisées sont mémorisées dans le navigateur (IndexedDB) et se rechargent sans NCBI. Une accession NG_ précise ou un fichier GenBank / FASTA local restent possibles.
 2. **Chromatogrammes** : importer les `.ab1` Forward et Reverse, puis cliquer sur « Analyser ».
-3. **Variants** : cliquer sur une ligne pour voir le contexte et le chromatogramme centré sur le variant. Les lignes Réf. / Allèle 1 / Allèle 2 sous les pics montrent la déconvolution. Export CSV disponible.
+3. **Lisibilité des lectures** : chaque lecture est classée « exploitable », « exploitable avec prudence » ou « illisible » (non localisée sur la référence, signal noyé dans le bruit, moins de la moitié des bases alignées…), avec la raison. Les lectures illisibles sont ignorées, et l’outil signale quand aucune lecture Forward ou Reverse n’est exploitable, puisqu’aucun variant ne peut alors être confirmé sur les deux brins.
+4. **Variants** : nomenclature `c.`, `p.` (prédite à partir du transcrit : faux-sens, non-sens, décalage du cadre `fs*N`, délétions/duplications en phase, `p.?` pour les sites d’épissage ±1/±2 et les indels qui chevauchent une jonction exon-intron) et `g.`. Le bouton « Fréquences gnomAD » convertit chaque variant en coordonnées GRCh38 (repérage de la référence NG_ sur le chromosome via Ensembl, normalisation à gauche façon VCF) et interroge gnomAD v4 (exomes + génomes). Il envoie le symbole du gène à Ensembl et les positions des variants à gnomAD, jamais les chromatogrammes. Si l’API gnomAD ne répond pas, chaque variant garde un lien vers sa page gnomAD.
+5. **Détail** : cliquer sur une ligne pour voir le contexte et le chromatogramme centré sur le variant. Les lignes Réf. / Allèle 1 / Allèle 2 sous les pics montrent la déconvolution. Export CSV disponible.
 
 Un jeu de démonstration entièrement synthétique est fourni dans `demo/` (gène fictif, `c.752dup` hétérozygote) : référence `demo/NG_DEMO.gb`, lectures `DEMO_F.ab1` et `DEMO_R.ab1`. Pour le régénérer : `node test/make-demo.js`.
 
@@ -60,7 +62,7 @@ Ces chiffres portent sur des **données simulées**. La validation sur de vrais 
 - Indels > 120 nt (délétion) ou > 40 nt (insertion) : non recherchés directement.
 - L’enregistrement NG_ peut décrire une version antérieure du transcrit (ex. NG_007110.2 → NM_000251.2) : la numérotation c. du CDS est en général identique, mais à vérifier pour les UTR.
 - Transcrits sur le brin − de leur NG_ : nomenclature `g.` seulement (cas exceptionnel, les NG_ étant orientés dans le sens du gène).
-- Pas encore de conséquence protéique (`p.`).
+- Nomenclature `p.` prédite (aucune donnée ARN) ; un variant intronique hors ±1/±2 n’a pas de `p.` mais est signalé en « région d’épissage » jusqu’à ±8.
 
 ## Structure
 
@@ -75,5 +77,7 @@ src/decompose.js          déconvolution, appel et fusion F/R des variants
 src/hgvs.js               normalisation 3′, coordonnées c., noms HGVS
 src/reference.js          GenBank, RefSeqGene, NCBI E-utilities
 src/cache.js              mémoire locale des références (IndexedDB)
+src/protein.js            conséquence protéique (HGVS p.)
+src/gnomad.js             correspondance GRCh38 (Ensembl) et fréquences gnomAD v4
 test/                     tests, simulateur de chromatogrammes, banc d'essai
 ```

@@ -78,7 +78,7 @@ ORIGIN
   assert.equal(t.id, 'NM_TEST.1');
   assert.deepEqual(t.exons, [[5, 20], [31, 50]]);
   assert.equal(t.product, 'test protein, transcript variant 1');
-  assert.deepEqual(cdsOfTranscript({ features: [{ key: 'CDS', intervals: [[229, 10485]], complement: false }] }), { cdsStart: 229, cdsEnd: 10485 });
+  assert.deepEqual(cdsOfTranscript({ features: [{ key: 'CDS', intervals: [[229, 10485]], complement: false }] }), { cdsStart: 229, cdsEnd: 10485, proteinId: '' });
 });
 
 test('alignement : gap affine', () => {

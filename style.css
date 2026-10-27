@@ -78,3 +78,5 @@ footer { text-align: center; color: var(--muted); padding: 18px 16px 28px; font-
   canvas#trace { height: 300px; }
   header h1 { font-size: 22px; }
 }
+a { color: var(--accent); }
+td.mono { white-space: nowrap; }

@@ -5,15 +5,18 @@ import { analyzeRead, mergeCalls } from './decompose.js';
 import { fetchGenBank, loadGene, referenceFromRecord, referenceFromFasta, referenceFromGenBank, preferredTranscript, listTranscripts } from './reference.js';
 import { complement } from './sequence.js';
 import { TraceView } from './trace-view.js';
+import { proteinName } from './protein.js';
+import { genomicMapping, gnomadId, gnomadFrequencies, gnomadUrl } from './gnomad.js';
 
 const $ = id => document.getElementById(id);
-const state = { ref: null, ngRecord: null, localGenBank: null, results: [], merged: [] };
+const state = { ref: null, ngRecord: null, localGenBank: null, results: [], failed: [], merged: [] };
 
 const TYPE_LABEL = { snv: 'SNV', del: 'délétion', dup: 'duplication', ins: 'insertion', delins: 'délétion-insertion' };
 
 function setStatus(id, text, error = false) {
   const el = $(id);
   el.textContent = text;
+  el.hidden = false;
   el.classList.toggle('error', error);
 }
 
@@ -155,24 +158,50 @@ $('analyze').addEventListener('click', async () => {
   setStatus('readStatus', 'Analyse en cours…');
   await new Promise(r => setTimeout(r, 20));
 
-  const results = [], errors = [];
+  const results = [], failed = [];
   for (const file of files) {
     try {
       const read = parseABIF(await file.arrayBuffer());
       read.name = file.name;
       results.push(analyzeRead(read, state.ref, options()));
     } catch (e) {
-      errors.push(e.message.startsWith(file.name) ? e.message : `${file.name} : ${e.message}`);
+      const reason = e.message.startsWith(file.name) ? e.message.slice(file.name.length).replace(/^\s*:\s*/, '') : e.message;
+      failed.push({ name: file.name, reason });
     }
   }
   state.results = results;
-  state.merged = mergeCalls(results, state.ref);
+  state.failed = failed;
+  $('gnomadStatus').hidden = true;
+  // Une lecture illisible n'apporte que du bruit : ni appels, ni confirmation.
+  state.merged = mergeCalls(results.filter(r => r.quality.verdict !== 'illisible'), state.ref);
+  for (const v of state.merged) v.protein = proteinName(v, state.ref);
   renderReads();
   renderVariants();
   renderTraceSelect();
-  const summary = `${results.length} lecture(s) analysée(s), ${state.merged.length} variant(s).`;
-  setStatus('readStatus', [summary, ...errors.map(e => '⚠ ' + e)].join('\n'), errors.length > 0 && !results.length);
+  setStatus('readStatus', readSummary(), !results.length);
 });
+
+/** Orientation devinée d'après le nom de fichier (lectures non localisées). */
+function strandFromName(name) {
+  if (/forward|fwd/i.test(name)) return '+';
+  if (/reverse|rev/i.test(name)) return '-';
+  const m = name.match(/(?<![A-Za-z])([FR])(?![A-Za-z])/i);
+  return m ? (m[1].toUpperCase() === 'F' ? '+' : '-') : null;
+}
+
+/** Bilan des lectures : combien sont exploitables, par brin, et ce qui manque pour confirmer. */
+function readSummary() {
+  const usable = state.results.filter(r => r.quality.verdict !== 'illisible');
+  const lines = [`${usable.length} lecture(s) exploitable(s) sur ${state.results.length + state.failed.length}, ${state.merged.length} variant(s).`];
+  for (const [strand, label] of [['+', 'Forward'], ['-', 'Reverse']]) {
+    const ok = usable.some(r => r.strand === strand);
+    const bad = [...state.results.filter(r => r.strand === strand && r.quality.verdict === 'illisible').map(r => r.name),
+      ...state.failed.filter(f => strandFromName(f.name) === strand).map(f => f.name)];
+    if (!ok) lines.push(`⚠ Aucune lecture ${label} exploitable${bad.length ? ` (${bad.join(', ')} illisible)` : ''} : les variants ne pourront pas être confirmés sur les deux brins.`);
+  }
+  for (const f of state.failed) lines.push(`⚠ ${f.name} : illisible — ${f.reason}`);
+  return lines.join('\n');
+}
 
 function regionLabel(r) {
   const m = state.ref.mapper;
@@ -180,19 +209,41 @@ function regionLabel(r) {
   return m ? `${g} (c.${m.c(r.refStart)}_${m.c(r.refEnd)})` : g;
 }
 
+const QUALITY_TAG = { bonne: ['exploitable', 'ok'], médiocre: ['exploitable avec prudence', 'warn'], illisible: ['illisible', 'bad'] };
+
 function renderReads() {
   const table = $('readTable'), body = table.querySelector('tbody');
   body.replaceChildren();
-  table.hidden = !state.results.length;
+  table.hidden = !state.results.length && !state.failed.length;
   for (const r of state.results) {
     const tr = document.createElement('tr');
     cell(tr, r.name, 'mono');
     cell(tr, r.strand === '+' ? 'Forward (+)' : 'Reverse (−)');
+    const [label, kind] = QUALITY_TAG[r.quality.verdict];
+    const q = cell(tr, tag(label, kind));
+    const details = [...r.quality.reasons, `signal/bruit ${r.quality.snr.toFixed(0)}`, r.quality.meanQ !== null ? `Q moyen ${Math.round(r.quality.meanQ)}` : null].filter(Boolean);
+    const note = document.createElement('div');
+    note.className = 'note';
+    note.textContent = details.join(' · ');
+    q.append(note);
     cell(tr, regionLabel(r), 'mono');
     cell(tr, `${r.alignedBases} / ${r.usableBases}`);
     cell(tr, `${Math.round(100 * r.mixedFraction)} %`);
     const shift = r.partial ? Math.abs(r.partial.ins.length - r.partial.del.length) : 0;
-    cell(tr, String(r.variants.length) + (shift ? ` · décalage de ${shift} nt dès le début de la lecture` : ''));
+    cell(tr, r.quality.verdict === 'illisible' ? 'ignorée' : String(r.variants.length) + (shift ? ` · décalage de ${shift} nt dès le début de la lecture` : ''));
+    body.append(tr);
+  }
+  for (const f of state.failed) {
+    const tr = document.createElement('tr');
+    cell(tr, f.name, 'mono');
+    const strand = strandFromName(f.name);
+    cell(tr, strand ? `${strand === '+' ? 'Forward' : 'Reverse'} ? (d’après le nom)` : '—');
+    const q = cell(tr, tag('illisible', 'bad'));
+    const note = document.createElement('div');
+    note.className = 'note';
+    note.textContent = f.reason;
+    q.append(note);
+    cell(tr, '—'); cell(tr, '—'); cell(tr, '—'); cell(tr, 'ignorée');
     body.append(tr);
   }
 }
@@ -207,10 +258,11 @@ function renderVariants() {
   const body = $('variantTable').querySelector('tbody');
   body.replaceChildren();
   $('exportCsv').disabled = !state.merged.length;
+  $('gnomadButton').disabled = !state.merged.length;
   $('variantDetail').hidden = true;
   if (!state.merged.length) {
     const tr = document.createElement('tr');
-    cell(tr, state.results.length ? 'Aucun variant détecté. Un résultat vide n’exclut pas un variant.' : 'Aucune analyse.', 'empty').colSpan = 7;
+    cell(tr, state.results.length ? 'Aucun variant détecté. Un résultat vide n’exclut pas un variant.' : 'Aucune analyse.', 'empty').colSpan = 9;
     body.append(tr);
     return;
   }
@@ -218,12 +270,15 @@ function renderVariants() {
     const tr = document.createElement('tr');
     tr.className = 'clickable';
     cell(tr, v.names.c ? v.names.c.split(':')[1] : '—', 'mono');
+    const p = cell(tr, v.protein?.short || '—', 'mono');
+    p.title = v.protein?.effect || '';
     cell(tr, v.names.g.split(':')[1], 'mono');
     cell(tr, TYPE_LABEL[v.type] || v.type);
     cell(tr, v.genotype);
     const fractions = v.reads.map(x => x.alleleFraction).filter(Number.isFinite);
     cell(tr, fractions.length ? fractions.map(f => `${Math.round(100 * f)} %`).join(' / ') : '—');
     cell(tr, statusTag(v));
+    cell(tr, gnomadCell(v));
     cell(tr, [...v.reads.map(x => `${x.name} (${x.strand})`), ...v.supportedBy.map(x => `${x.name} (${x.strand}, par modélisation)`)].join(', '), 'mono');
     tr.addEventListener('click', () => {
       body.querySelectorAll('tr').forEach(x => x.classList.remove('selected'));
@@ -242,7 +297,9 @@ function showVariant(v) {
   const pad = s => s + '-'.repeat(width - s.length);
   const lines = [
     v.names.c || v.names.g,
+    v.protein?.name ? `${v.protein.name} · ${v.protein.effect}` : v.protein?.effect ? `Conséquence : ${v.protein.effect}` : '',
     v.names.c ? v.names.g : '',
+    v.gnomad?.id ? `GRCh38 ${v.gnomad.id} · gnomAD v4 : ${formatFrequency(v.gnomad)}` : '',
     `${TYPE_LABEL[v.type] || v.type} · ${v.genotype} · ${v.status}`,
     '',
     `Référence  ${left.toLowerCase()}${pad(v.del)}${right.toLowerCase()}`,
@@ -251,7 +308,7 @@ function showVariant(v) {
     ...v.reads.map(x => `${x.name} (${x.strand}) : base ${x.readBase} · ${x.evidence}${Number.isFinite(x.alleleFraction) ? ` · fraction ${Math.round(100 * x.alleleFraction)} %` : ''}${x.flags.length ? ' · ' + x.flags.join(', ') : ''}`),
     ...v.supportedBy.map(x => `${x.name} (${x.strand}) : non appelé directement, mais signal nettement mieux expliqué avec ce variant (gain d’ajustement ${Math.round(x.gain)})`),
     ...(v.missing.length ? [`Non retrouvé sur : ${v.missing.join(', ')} (lecture informative à cette position)`] : []),
-  ].filter((l, i) => l !== '' || i > 2);
+  ].filter((l, i) => l !== '' || i > 4);
   const detail = $('variantDetail');
   detail.textContent = lines.join('\n');
   detail.hidden = false;
@@ -264,9 +321,12 @@ function showVariant(v) {
 }
 
 $('exportCsv').addEventListener('click', () => {
-  const header = ['HGVS_c', 'HGVS_g', 'type', 'genotype', 'statut', 'lectures', 'fractions', 'arguments'];
+  const header = ['HGVS_c', 'HGVS_p', 'consequence', 'HGVS_g', 'GRCh38', 'gnomAD_AF', 'gnomAD_AC_AN', 'type', 'genotype', 'statut', 'lectures', 'fractions', 'arguments'];
   const rows = state.merged.map(v => [
-    v.names.c || '', v.names.g, v.type, v.genotype, v.status,
+    v.names.c || '', v.protein?.name || '', v.protein?.effect || '', v.names.g, v.gnomad?.id || '',
+    v.gnomad?.freq ? v.gnomad.freq.af : v.gnomad?.freq === null ? 0 : '',
+    v.gnomad?.freq ? `${v.gnomad.freq.ac}/${v.gnomad.freq.an}` : '',
+    v.type, v.genotype, v.status,
     v.reads.map(x => `${x.name} (${x.strand})`).join('; '),
     v.reads.map(x => Number.isFinite(x.alleleFraction) ? x.alleleFraction.toFixed(2) : '').join('; '),
     v.reads.map(x => x.evidence).join('; '),
@@ -337,3 +397,55 @@ $('traceRead').addEventListener('change', e => showTrace(Number(e.target.value))
 $('zoomIn').addEventListener('click', () => view.zoom(0.6));
 $('zoomOut').addEventListener('click', () => view.zoom(1.6));
 $('zoomAll').addEventListener('click', () => view.read && view.show(0, view.read.bases.length));
+
+// ---------------------------------------------------------------------------
+// Fréquences gnomAD (à la demande : envoie les positions des variants à Ensembl et gnomAD)
+
+function formatFrequency(g) {
+  if (g.error) return `indisponible (${g.error})`;
+  if (g.freq === undefined) return 'non interrogé';
+  if (g.freq === null) return 'absent';
+  const { af, ac, an } = g.freq;
+  const pct = af === 0 ? '0' : 100 * af >= 1e-4 ? (100 * af).toLocaleString('fr-FR', { maximumSignificantDigits: 2 }) : (100 * af).toExponential(1).replace('.', ',');
+  return `${pct} % (${ac.toLocaleString('fr-FR')} / ${an.toLocaleString('fr-FR')})`;
+}
+
+function gnomadCell(v) {
+  if (!v.gnomad) return '—';
+  if (!v.gnomad.id) return v.gnomad.error ? `indisponible` : '—';
+  const a = document.createElement('a');
+  a.href = gnomadUrl(v.gnomad.id);
+  a.target = '_blank';
+  a.rel = 'noopener noreferrer';
+  a.textContent = formatFrequency(v.gnomad);
+  a.title = `${v.gnomad.id} — ouvrir dans gnomAD`;
+  a.addEventListener('click', e => e.stopPropagation());
+  return a;
+}
+
+$('gnomadButton').addEventListener('click', async () => {
+  if (!state.merged.length) return;
+  const button = $('gnomadButton');
+  button.disabled = true;
+  setStatus('gnomadStatus', 'Correspondance avec le génome de référence GRCh38 (Ensembl)…');
+  try {
+    const map = await genomicMapping(state.ref);
+    for (const v of state.merged) v.gnomad = { id: gnomadId(v, map) };
+    const ids = state.merged.map(v => v.gnomad.id).filter(Boolean);
+    setStatus('gnomadStatus', `Interrogation de gnomAD v4 pour ${ids.length} variant(s)…`);
+    try {
+      const freqs = await gnomadFrequencies(ids);
+      for (const v of state.merged) if (v.gnomad.id) v.gnomad.freq = freqs.get(v.gnomad.id);
+      setStatus('gnomadStatus', `gnomAD v4 (exomes + génomes), chromosome ${map.chrom} (GRCh38), référence sur le brin ${map.strand === "+" ? "+" : "−"}. « absent » = variant non observé dans gnomAD. Cliquer sur une fréquence ouvre la page gnomAD.`);
+    } catch (e) {
+      // API gnomAD inaccessible : on garde les liens vers le site, qui reste consultable.
+      for (const v of state.merged) if (v.gnomad.id) v.gnomad.error = 'API gnomAD inaccessible';
+      setStatus('gnomadStatus', `L’API gnomAD n’a pas répondu (${e.message}). Les liens de la colonne gnomAD ouvrent quand même chaque variant sur le site.`, true);
+    }
+  } catch (e) {
+    for (const v of state.merged) v.gnomad = { id: null, error: e.message };
+    setStatus('gnomadStatus', `Correspondance GRCh38 impossible : ${e.message}`, true);
+  }
+  renderVariants();
+  button.disabled = false;
+});

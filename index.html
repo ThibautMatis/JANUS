@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src https://eutils.ncbi.nlm.nih.gov; img-src 'self' data:; style-src 'self'; script-src 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src https://eutils.ncbi.nlm.nih.gov https://rest.ensembl.org https://gnomad.broadinstitute.org; img-src 'self' data:; style-src 'self'; script-src 'self'">
   <title>SVIB · variants Sanger</title>
   <link rel="stylesheet" href="style.css">
 </head>
@@ -59,7 +59,7 @@
       </details>
       <div id="readStatus" class="status" aria-live="polite">En attente de fichiers.</div>
       <div class="scroll"><table id="readTable" hidden>
-        <thead><tr><th>Lecture</th><th>Brin</th><th>Région</th><th>Bases alignées</th><th>Pics mixtes</th><th>Variants</th></tr></thead>
+        <thead><tr><th>Lecture</th><th>Brin</th><th>Lisibilité</th><th>Région</th><th>Bases alignées</th><th>Pics mixtes</th><th>Variants</th></tr></thead>
         <tbody></tbody>
       </table></div>
     </section>
@@ -67,12 +67,15 @@
     <section class="card" id="step-results">
       <h2><span class="num">3</span> Variants</h2>
       <div class="scroll"><table id="variantTable">
-        <thead><tr><th>HGVS c.</th><th>HGVS g.</th><th>Type</th><th>Génotype</th><th>Fraction</th><th>Statut</th><th>Lectures</th></tr></thead>
-        <tbody><tr><td colspan="7" class="empty">Aucune analyse.</td></tr></tbody>
+        <thead><tr><th>HGVS c.</th><th>HGVS p.</th><th>HGVS g.</th><th>Type</th><th>Génotype</th><th>Fraction</th><th>Statut</th><th>gnomAD v4</th><th>Lectures</th></tr></thead>
+        <tbody><tr><td colspan="9" class="empty">Aucune analyse.</td></tr></tbody>
       </table></div>
       <div class="controls">
+        <button id="gnomadButton" type="button" disabled>Fréquences gnomAD</button>
         <button id="exportCsv" type="button" disabled>Exporter (CSV)</button>
       </div>
+      <p class="note">« Fréquences gnomAD » envoie à Ensembl le symbole du gène et à gnomAD les positions GRCh38 des variants affichés (aucun chromatogramme, aucun identifiant d’échantillon). La nomenclature p. est une prédiction à partir de la séquence du transcrit.</p>
+      <div id="gnomadStatus" class="status" hidden></div>
       <pre id="variantDetail" class="detail" hidden></pre>
     </section>
 
