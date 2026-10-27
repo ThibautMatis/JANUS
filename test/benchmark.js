@@ -1,4 +1,4 @@
-// Banc d'essai sur chromatogrammes simulés : node test/benchmark.js [cas par condition]
+// Banc d'essai sur chromatogrammes simulés : node test/benchmark.js [cas par condition] [--grands]
 // Mesure, par fraction allélique et niveau de bruit, la proportion de variants retrouvés
 // exactement (nom HGVS identique) et le nombre d'appels faux.
 import { analyzeRead, mergeCalls } from '../src/decompose.js';
@@ -8,18 +8,22 @@ import { revcomp } from '../src/sequence.js';
 import { simulate, rng, randomSeq } from './synth.js';
 
 const N = Number(process.argv[2]) || 40;
+const LARGE = process.argv.includes('--grands');
 const rand = rng(99);
 const SEQ = randomSeq(8000, rand);
 const REF = buildReference({ accession: 'NG_BENCH.1', seq: SEQ });
 
 function makeVariant(r) {
   const g = 2000 + Math.floor(r() * 400); // centre de l'amplicon
-  const kind = Math.floor(r() * 4);
+  const kind = Math.floor(r() * (LARGE ? 6 : 4));
   const rb = () => 'ACGT'[Math.floor(r() * 4)];
   if (kind === 0) { let b; do b = rb(); while (b === SEQ[g - 1]); return { g, del: 1, ins: b }; }
   if (kind === 1) { const L = 1 + Math.floor(r() * 3); return { g, del: 0, ins: SEQ.slice(g - 1 - L, g - 1) }; } // dup
   if (kind === 2) { const L = 1 + Math.floor(r() * 10); return { g, del: L, ins: '' }; }
-  const L = 1 + Math.floor(r() * 5); let s = ''; for (let i = 0; i < L; i++) s += rb(); return { g, del: 0, ins: s };
+  if (kind === 3) { const L = 1 + Math.floor(r() * 5); let s = ''; for (let i = 0; i < L; i++) s += rb(); return { g, del: 0, ins: s }; }
+  // Grands indels (option --grands) : délétion de 11 à 80 nt, insertion de 6 à 30 nt.
+  if (kind === 4) { const L = 11 + Math.floor(r() * 70); return { g, del: L, ins: '' }; }
+  const L = 6 + Math.floor(r() * 25); let s = ''; for (let i = 0; i < L; i++) s += rb(); return { g, del: 0, ins: s };
 }
 
 function expectedName(v) {

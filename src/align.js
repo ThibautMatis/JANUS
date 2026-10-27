@@ -123,3 +123,32 @@ export function locate(query, index, k = 12) {
   }
   return best;
 }
+
+/**
+ * Localisation de secours d'une lecture entièrement mixte (deux allèles décalés dès le début) :
+ * chaque position propose une ou deux bases ; on énumère les k-mers compatibles des fenêtres
+ * comportant au plus `maxMixed` positions doubles. `choices[i]` = chaîne de 1 ou 2 bases.
+ */
+export function locateAmbiguous(choices, index, k = 10, maxMixed = 4) {
+  const votes = new Map();
+  for (let i = 0; i + k <= choices.length; i++) {
+    const win = choices.slice(i, i + k);
+    if (win.filter(c => c.length > 1).length > maxMixed) continue;
+    let kmers = [''];
+    for (const c of win) kmers = kmers.flatMap(p => [...c].map(b => p + b));
+    for (const kmer of kmers) {
+      const hits = index.get(kmer);
+      if (!hits || hits.length > 4) continue;
+      for (const t of hits) {
+        const d = Math.round((t - i) / 16);
+        votes.set(d, (votes.get(d) || 0) + 1);
+      }
+    }
+  }
+  let best = null;
+  for (const [d, v] of votes) {
+    const total = v + (votes.get(d - 1) || 0) + (votes.get(d + 1) || 0);
+    if (!best || total > best.votes) best = { diagonal: d * 16, votes: total };
+  }
+  return best;
+}
