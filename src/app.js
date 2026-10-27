@@ -1,4 +1,4 @@
-// Interface de SVIB : chargement de la référence, analyse des .ab1, résultats et chromatogramme.
+// Interface de JANUS : chargement de la référence, analyse des .ab1, résultats et chromatogramme.
 
 import { parseABIF } from './abif.js';
 import { analyzeRead, mergeCalls } from './decompose.js';
@@ -6,6 +6,9 @@ import { fetchGenBank, loadGene, referenceFromRecord, referenceFromFasta, refere
 import { complement } from './sequence.js';
 import { TraceView, snapshot } from './trace-view.js';
 import { CLASSES, classOf, conclusion, geneOf, analysedRegion } from './report.js';
+import { NAME, releaseLabel } from './version.js';
+
+document.getElementById('release').textContent = releaseLabel();
 import { proteinName } from './protein.js';
 import { genomicMapping, gnomadId, gnomadFrequencies, gnomadUrl } from './gnomad.js';
 
@@ -89,13 +92,13 @@ $('loadGene').addEventListener('click', async () => {
   if (!gene) return setStatus('refStatus', 'Saisissez un symbole de gène (ex. BRCA2).', true);
   try {
     showLoaded(await loadGene(gene, text => setStatus('refStatus', text)));
-    try { localStorage.setItem('svib.gene', gene); } catch { /* facultatif */ }
+    try { localStorage.setItem('janus.gene', gene); } catch { /* facultatif */ }
   } catch (e) {
     setStatus('refStatus', `Chargement impossible : ${e.message}. Vous pouvez saisir une accession NG_ précise ou importer un fichier local.`, true);
   }
 });
 $('gene').addEventListener('keydown', e => { if (e.key === 'Enter') $('loadGene').click(); });
-try { const last = localStorage.getItem('svib.gene'); if (last) $('gene').value = last; } catch { /* facultatif */ }
+try { const last = localStorage.getItem('janus.gene'); if (last) $('gene').value = last; } catch { /* facultatif */ }
 
 $('loadNg').addEventListener('click', async () => {
   const acc = $('ngAccession').value.trim().toUpperCase();
@@ -375,7 +378,7 @@ $('exportCsv').addEventListener('click', () => {
   const url = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }));
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'svib_variants.csv';
+  a.download = 'janus_variants.csv';
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
@@ -649,7 +652,7 @@ function renderReportPreview() {
     reads,
     el('h2', {}, selected.length > 1 ? 'Variants retenus' : 'Variant retenu'),
     ...variants,
-    el('p', { class: 'disclaimer' }, 'Analyse réalisée avec SVIB v8 (déconvolution d’allèles de chromatogrammes Sanger), outil de recherche non validé pour le diagnostic. Les nomenclatures p. sont prédites. Tout variant doit être confirmé visuellement sur le chromatogramme et par une méthode validée ; l’absence de variant détecté n’exclut pas un variant non détectable par cette méthode (mosaïque, grande délétion, allèle non amplifié).'),
+    el('p', { class: 'disclaimer' }, `Analyse réalisée avec ${NAME} ${releaseLabel()} (déconvolution d’allèles de chromatogrammes Sanger, méthode inspirée de Tracy, Rausch et al., BMC Genomics 2020), outil de recherche non validé pour le diagnostic. Les nomenclatures p. sont prédites. Tout variant doit être confirmé visuellement sur le chromatogramme et par une méthode validée ; l’absence de variant détecté n’exclut pas un variant non détectable par cette méthode (mosaïque, grande délétion, allèle non amplifié).`),
   );
 }
 

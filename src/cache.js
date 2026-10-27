@@ -2,7 +2,7 @@
 // Une accession versionnée (ex. NG_012772.3) ne change jamais : on peut la garder indéfiniment.
 // Le cache est facultatif : toute erreur (navigation privée, stockage bloqué) le rend simplement inactif.
 
-const DB = 'svib', STORE = 'references';
+const DB = 'janus', STORE = 'references';
 let dbPromise = null;
 
 function open() {

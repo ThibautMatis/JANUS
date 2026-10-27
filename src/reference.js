@@ -168,7 +168,7 @@ const EUTILS = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/';
 async function eutils(endpoint, params) {
   const url = new URL(EUTILS + endpoint);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
-  url.searchParams.set('tool', 'svib');
+  url.searchParams.set('tool', 'janus');
   const response = await fetch(url, { mode: 'cors', cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer' });
   if (!response.ok) throw new Error('NCBI HTTP ' + response.status);
   const body = await response.text();
