@@ -59,8 +59,9 @@ export class TraceView {
 
   draw() {
     const { canvas, read } = this;
-    const dpr = window.devicePixelRatio || 1;
-    const W = canvas.clientWidth, H = canvas.clientHeight;
+    // width / height / dpr fixes : rendu hors écran (capture pour le rapport).
+    const dpr = this.dpr ?? (window.devicePixelRatio || 1);
+    const W = this.width ?? canvas.clientWidth, H = this.height ?? canvas.clientHeight;
     if (!W || !H) return;
     canvas.width = Math.round(W * dpr);
     canvas.height = Math.round(H * dpr);
@@ -70,7 +71,7 @@ export class TraceView {
     if (!read) return;
 
     const css = getComputedStyle(canvas);
-    COLORS.G = css.getPropertyValue('--trace-g').trim() || COLORS.G;
+    const colors = { ...COLORS, G: css.getPropertyValue('--trace-g').trim() || COLORS.G };
     const muted = css.getPropertyValue('--muted').trim() || '#647587';
     const accent = css.getPropertyValue('--accent').trim() || '#147b95';
     const rows = this.annotations.size ? 3 : 0;
@@ -97,7 +98,7 @@ export class TraceView {
     ctx.lineWidth = 1.4;
     for (const b of 'ACGT') {
       ctx.beginPath();
-      ctx.strokeStyle = COLORS[b];
+      ctx.strokeStyle = colors[b];
       const t = read.traces[b];
       for (let i = x0; i <= x1; i++) {
         const x = X(i), y = 8 + plotH - (t[i] / ymax) * plotH;
@@ -116,14 +117,14 @@ export class TraceView {
       const x = X(read.positions[k]);
       if (showLetters) {
         ctx.font = '600 13px ui-monospace, SFMono-Regular, Menlo, monospace';
-        ctx.fillStyle = COLORS[read.bases[k]] || OTHER;
+        ctx.fillStyle = colors[read.bases[k]] || OTHER;
         ctx.fillText(read.bases[k], x, yBase);
         const a = this.annotations.get(k);
         if (a) {
           ctx.font = '12px ui-monospace, SFMono-Regular, Menlo, monospace';
           [a.ref, a.a1, a.a2].forEach((b, r) => {
             const differs = r > 0 && b !== a.ref;
-            ctx.fillStyle = differs ? accent : (COLORS[b] || muted);
+            ctx.fillStyle = differs ? accent : (colors[b] || muted);
             if (differs) ctx.font = '700 12px ui-monospace, SFMono-Regular, Menlo, monospace';
             ctx.fillText(b, x, yBase + labelH + r * rowH);
             ctx.font = '12px ui-monospace, SFMono-Regular, Menlo, monospace';
@@ -236,4 +237,21 @@ export class TraceView {
       this.zoom(0.5, (e.clientX - rect.left) / rect.width);
     });
   }
+}
+
+/**
+ * Image PNG (data URL) d'un chromatogramme centré sur la base `center`, en couleurs claires,
+ * pour le rapport imprimable.
+ */
+export function snapshot(read, annotations, markers, center, { width = 1000, height = 300, count = 41 } = {}) {
+  const canvas = document.createElement('canvas');
+  const view = Object.create(TraceView.prototype);
+  const n = read.bases.length;
+  count = Math.min(n, count);
+  Object.assign(view, {
+    canvas, read, annotations, markers, width, height, dpr: 2, hover: null, label: null,
+    count, start: Math.max(0, Math.min(n - count, Math.round(center - count / 2))),
+  });
+  view.draw();
+  return canvas.toDataURL('image/png');
 }

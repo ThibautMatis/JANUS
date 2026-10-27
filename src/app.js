@@ -4,7 +4,8 @@ import { parseABIF } from './abif.js';
 import { analyzeRead, mergeCalls } from './decompose.js';
 import { fetchGenBank, loadGene, referenceFromRecord, referenceFromFasta, referenceFromGenBank, preferredTranscript, listTranscripts } from './reference.js';
 import { complement } from './sequence.js';
-import { TraceView } from './trace-view.js';
+import { TraceView, snapshot } from './trace-view.js';
+import { CLASSES, classOf, conclusion, geneOf, analysedRegion } from './report.js';
 import { proteinName } from './protein.js';
 import { genomicMapping, gnomadId, gnomadFrequencies, gnomadUrl } from './gnomad.js';
 
@@ -178,6 +179,7 @@ $('analyze').addEventListener('click', async () => {
   renderReads();
   renderVariants();
   renderTraceSelect();
+  resetReport();
   setStatus('readStatus', readSummary(), !results.length);
 });
 
@@ -496,5 +498,164 @@ $('gnomadButton').addEventListener('click', async () => {
     setStatus('gnomadStatus', `Correspondance GRCh38 impossible : ${e.message}`, true);
   }
   renderVariants();
+  renderReportPreview();
   button.disabled = false;
+});
+
+// ---------------------------------------------------------------------------
+// 5. Rapport
+
+const report = { choices: new Map(), edited: false, images: new Map() };
+
+function el(tag, props = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k === 'class') node.className = v; else if (k in node) node[k] = v; else node.setAttribute(k, v);
+  }
+  for (const c of children.flat()) if (c !== null && c !== undefined && c !== '') node.append(c instanceof Node ? c : String(c));
+  return node;
+}
+
+/** Nouvelle analyse : variants confirmés F/R cochés par défaut, à classer. */
+function resetReport() {
+  report.choices = new Map(state.merged.map(v => [v.key, { checked: v.status === 'confirmé F/R', classId: '' }]));
+  report.edited = false;
+  report.images = new Map();
+  renderReportTable();
+  updateConclusion();
+  renderReportPreview();
+}
+
+const selectedForReport = () => state.merged
+  .filter(v => report.choices.get(v.key)?.checked)
+  .map(v => ({ variant: v, classId: report.choices.get(v.key).classId }));
+
+function renderReportTable() {
+  const body = $('reportTable').querySelector('tbody');
+  body.replaceChildren();
+  if (!state.merged.length) {
+    body.append(el('tr', {}, el('td', { colSpan: 4, class: 'empty' }, state.results.length ? 'Aucun variant détecté : le rapport conclura à l’absence de variant dans la région analysée.' : 'Lancez d’abord une analyse.')));
+    return;
+  }
+  for (const v of state.merged) {
+    const choice = report.choices.get(v.key);
+    const box = el('input', { type: 'checkbox', checked: choice.checked });
+    box.setAttribute('aria-label', `Inclure ${v.names.c || v.names.g} dans le rapport`);
+    const select = el('select', {}, el('option', { value: '' }, '— à classer —'), CLASSES.map(c => el('option', { value: c.id }, c.long)));
+    select.value = choice.classId;
+    const refresh = () => {
+      choice.checked = box.checked;
+      choice.classId = select.value;
+      select.classList.toggle('missing', choice.checked && !choice.classId);
+      updateConclusion();
+      renderReportPreview();
+    };
+    box.addEventListener('change', refresh);
+    select.addEventListener('change', refresh);
+    select.classList.toggle('missing', choice.checked && !choice.classId);
+    body.append(el('tr', {},
+      el('td', {}, box),
+      el('td', { class: 'mono' }, `${v.names.c ? v.names.c.split(':')[1] : v.names.g.split(':')[1]} ${v.protein?.short || ''}`),
+      el('td', {}, statusTag(v)),
+      el('td', {}, select)));
+  }
+}
+
+function updateConclusion(force = false) {
+  if (report.edited && !force) return;
+  $('repConclusion').value = state.ref && state.results.length ? conclusion(selectedForReport(), state.ref, state.results) : '';
+  report.edited = false;
+}
+
+$('repConclusion').addEventListener('input', () => { report.edited = true; renderReportPreview(); });
+$('repRegenerate').addEventListener('click', () => { updateConclusion(true); renderReportPreview(); });
+for (const id of ['repSample', 'repAuthor']) $(id).addEventListener('input', () => renderReportPreview());
+
+/** Capture centrée sur le variant pour chaque lecture qui le soutient (appel direct ou modélisation). */
+function variantFigures(v) {
+  const sources = [
+    ...v.reads.map(x => ({ result: x.result, center: x.readBase - 1, how: 'appel direct' })),
+    ...v.supportedBy.map(x => {
+      const result = state.results.find(r => r.name === x.name);
+      if (!result) return null;
+      // Base de la lecture la plus proche de la position du variant sur la référence.
+      let center = null, best = Infinity;
+      for (const [k, a] of annotationsOf(result)) if (a.g && Math.abs(a.g - (v.pos + 1)) < best) { best = Math.abs(a.g - (v.pos + 1)); center = k; }
+      return center === null ? null : { result, center, how: 'confirmé par modélisation' };
+    }),
+  ].filter(Boolean);
+  return sources.map(({ result, center, how }) => {
+    const key = `${v.key}|${result.name}`;
+    if (!report.images.has(key)) report.images.set(key, snapshot(result.read, annotationsOf(result), [center], center));
+    const pos = state.ref.mapper ? `c.${state.ref.mapper.c(v.pos + 1)}` : `g.${v.pos + 1}`;
+    return el('figure', {},
+      el('img', { src: report.images.get(key), alt: `Chromatogramme ${result.name} autour de ${pos}` }),
+      el('figcaption', {}, `${result.name} (${result.strand === '+' ? 'Forward' : 'Reverse'}, ${how}) — base ${center + 1} surlignée ; lignes : lecture, référence, allèle 1, allèle 2 (sens de lecture).`));
+  });
+}
+
+function renderReportPreview() {
+  const view = $('reportView');
+  const ready = Boolean(state.ref && state.results.length);
+  $('repPrint').disabled = !ready;
+  view.hidden = !ready;
+  if (!ready) return;
+  const ref = state.ref, gene = geneOf(ref);
+  const selected = selectedForReport();
+  const date = new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' });
+  const usable = state.results.filter(r => r.quality.verdict !== 'illisible');
+
+  const reads = el('table', {},
+    el('thead', {}, el('tr', {}, ['Lecture', 'Brin', 'Lisibilité', 'Région analysée'].map(t => el('th', {}, t)))),
+    el('tbody', {},
+      state.results.map(r => el('tr', {},
+        el('td', { class: 'mono' }, r.name),
+        el('td', {}, r.strand === '+' ? 'Forward' : 'Reverse'),
+        el('td', {}, QUALITY_TAG[r.quality.verdict][0]),
+        el('td', { class: 'mono' }, regionLabel(r)))),
+      state.failed.map(f => el('tr', {}, el('td', { class: 'mono' }, f.name), el('td', {}, '—'), el('td', {}, 'illisible'), el('td', {}, f.reason)))));
+
+  const variants = selected.length
+    ? selected.map(({ variant: v, classId }) => {
+      const cls = classOf(classId);
+      const fractions = v.reads.map(x => x.alleleFraction).filter(Number.isFinite).map(f => `${Math.round(100 * f)} %`).join(' / ');
+      const rows = [
+        ['Variant', v.names.c || v.names.g],
+        ['Protéine (prédite)', v.protein?.name ? `${v.protein.name} — ${v.protein.effect}` : v.protein?.effect || '—'],
+        ['Génomique', v.names.g + (v.gnomad?.id ? ` · GRCh38 ${v.gnomad.id}` : '')],
+        ['Génotype', `${v.genotype}${fractions ? ` (fraction ${fractions})` : ''}`],
+        ['Confirmation', `${v.status} — ${[...v.reads.map(x => `${x.name} (${x.strand})`), ...v.supportedBy.map(x => `${x.name} (${x.strand}, modélisation)`)].join(', ')}`],
+        ['gnomAD v4', v.gnomad ? formatFrequency(v.gnomad) : 'non interrogé'],
+        ['Classification', cls ? cls.long : 'à préciser'],
+      ];
+      return el('div', { class: 'variant' },
+        el('h3', { class: 'mono' }, v.names.c ? v.names.c.split(':')[1] : v.names.g.split(':')[1], v.protein?.short ? ` ${v.protein.short}` : ''),
+        el('table', {}, el('tbody', {}, rows.map(([k, val]) => el('tr', {}, el('th', {}, k), el('td', { class: k === 'Classification' && cls ? `class-${cls.id}` : k === 'Variant' ? 'mono' : '' }, val))))),
+        variantFigures(v));
+    })
+    : [el('p', {}, 'Aucun variant retenu.')];
+
+  view.replaceChildren(
+    el('h1', {}, `Analyse par séquençage Sanger — gène ${gene}`),
+    el('p', { class: 'meta' }, [
+      $('repSample').value.trim() ? `Échantillon : ${$('repSample').value.trim()}` : null,
+      `Date : ${date}`,
+      $('repAuthor').value.trim() ? `Analyse : ${$('repAuthor').value.trim()}` : null,
+    ].filter(Boolean).join(' · ')),
+    el('h2', {}, 'Conclusion'),
+    el('p', { class: 'conclusion' }, $('repConclusion').value.trim() || '—'),
+    el('h2', {}, 'Référence et région analysée'),
+    el('p', {}, `Référence génomique ${ref.accession}${ref.transcript ? `, transcrit ${ref.transcript.id}` : ''}${ref.cds?.proteinId ? `, protéine ${ref.cds.proteinId}` : ''}. Région analysée : ${analysedRegion(ref, state.results) || '—'} (${usable.length} lecture(s) exploitable(s)).`),
+    reads,
+    el('h2', {}, selected.length > 1 ? 'Variants retenus' : 'Variant retenu'),
+    ...variants,
+    el('p', { class: 'disclaimer' }, 'Analyse réalisée avec SVIB v8 (déconvolution d’allèles de chromatogrammes Sanger), outil de recherche non validé pour le diagnostic. Les nomenclatures p. sont prédites. Tout variant doit être confirmé visuellement sur le chromatogramme et par une méthode validée ; l’absence de variant détecté n’exclut pas un variant non détectable par cette méthode (mosaïque, grande délétion, allèle non amplifié).'),
+  );
+}
+
+$('repPrint').addEventListener('click', () => {
+  const missing = selectedForReport().filter(x => !x.classId);
+  if (missing.length && !window.confirm(`${missing.length} variant(s) retenu(s) sans classification. Imprimer quand même ?`)) return;
+  renderReportPreview();
+  window.print();
 });

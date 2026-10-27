@@ -85,3 +85,35 @@ th[data-sort] button::after { content: '↕'; opacity: .35; font-size: 11px; }
 th[aria-sort="ascending"] button::after { content: '▲'; opacity: 1; color: var(--accent); }
 th[aria-sort="descending"] button::after { content: '▼'; opacity: 1; color: var(--accent); }
 th[data-sort] button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+textarea { font: inherit; color: inherit; background: var(--card); width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; margin-top: 4px; resize: vertical; }
+#reportTable select { max-width: 320px; }
+#reportTable select.missing { border-color: var(--bad); }
+
+/* Aperçu du rapport : toujours sur fond blanc, comme imprimé. */
+.report { margin-top: 18px; background: #fff; color: #17293a; border: 1px solid var(--border); border-radius: 8px; padding: 28px 32px; font-size: 13.5px; line-height: 1.45; }
+.report h1 { font-size: 20px; margin: 0 0 4px; color: #12334d; }
+.report h2 { font-size: 15px; margin: 22px 0 8px; color: #12334d; border-bottom: 1px solid #d9e3eb; padding-bottom: 4px; display: block; }
+.report h3 { font-size: 14px; margin: 14px 0 6px; }
+.report .meta { color: #5a6d7d; margin: 0; }
+.report table { min-width: 0; font-size: 12.5px; }
+.report th { background: #eef4f8; position: static; }
+.report th, .report td { border-bottom: 1px solid #e2eaf0; padding: 5px 7px; }
+.report .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.report figure { margin: 8px 0 12px; break-inside: avoid; }
+.report figure img { width: 100%; border: 1px solid #d9e3eb; border-radius: 4px; }
+.report figcaption { color: #5a6d7d; font-size: 11.5px; margin-top: 2px; }
+.report .variant { break-inside: avoid; }
+.report .conclusion { background: #eef4f8; border-left: 4px solid #127a94; padding: 10px 14px; white-space: pre-wrap; font-weight: 600; }
+.report .class-5, .report .class-4 { color: #b3261e; font-weight: 700; }
+.report .class-3 { color: #8a5a00; font-weight: 700; }
+.report .class-1, .report .class-2 { color: #1a7a45; font-weight: 700; }
+.report .disclaimer { color: #5a6d7d; font-size: 11px; margin-top: 18px; }
+
+@media print {
+  @page { margin: 14mm; }
+  body { background: #fff; }
+  header, footer, main > *:not(#step-report), #step-report > *:not(#reportView) { display: none !important; }
+  main, #step-report { padding: 0; margin: 0; border: 0; box-shadow: none; max-width: none; }
+  #reportView { display: block !important; border: 0; padding: 0; margin: 0; }
+}
