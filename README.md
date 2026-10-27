@@ -20,7 +20,7 @@ L’approche s’inspire de Tracy / Indigo (Rausch et al., *BMC Bioinformatics* 
 
 Les modules ES nécessitent un serveur HTTP : GitHub Pages convient, ou en local `python3 -m http.server` puis http://localhost:8000.
 
-1. **Référence** : rechercher le gène et charger le NG_ proposé (ex. `NG_012772.3` pour BRCA2), puis choisir le transcrit (ex. `NM_000059.4`). Sans accès à NCBI, importer un fichier GenBank NG_ téléchargé au préalable (format « GenBank (full) »).
+1. **Référence** : taper le symbole du gène (ex. `BRCA2`) puis cliquer sur « Charger ». L’outil trouve le RefSeqGene du gène (NG_012772.3 pour BRCA2) et présélectionne le transcrit de référence (MANE Select s’il est signalé, sinon le premier décrit). Les références déjà utilisées sont mémorisées dans le navigateur (IndexedDB) et se rechargent sans NCBI. Une accession NG_ précise ou un fichier GenBank / FASTA local restent possibles.
 2. **Chromatogrammes** : importer les `.ab1` Forward et Reverse, puis cliquer sur « Analyser ».
 3. **Variants** : cliquer sur une ligne pour voir le contexte et le chromatogramme centré sur le variant. Les lignes Réf. / Allèle 1 / Allèle 2 sous les pics montrent la déconvolution. Export CSV disponible.
 
@@ -66,5 +66,6 @@ src/align.js              alignement local affine, localisation par k-mers
 src/decompose.js          déconvolution, appel et fusion F/R des variants
 src/hgvs.js               normalisation 3′, coordonnées c., noms HGVS
 src/reference.js          GenBank, RefSeqGene, NCBI E-utilities
+src/cache.js              mémoire locale des références (IndexedDB)
 test/                     tests, simulateur de chromatogrammes, banc d'essai
 ```

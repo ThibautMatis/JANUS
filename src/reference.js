@@ -2,6 +2,7 @@
 // avec la structure exonique des transcrits NM_, requêtes NCBI E-utilities.
 
 import { transcriptMapper } from './hgvs.js';
+import { cacheGet, cachePut } from './cache.js';
 
 /** Analyse une localisation GenBank (join, complement, order, <, >) en intervalles 1-based. */
 export function parseLocation(loc) {
@@ -23,6 +24,7 @@ export function parseGenBank(text) {
     if (!/^LOCUS/m.test(chunk)) continue;
     const accession = chunk.match(/^VERSION\s+(\S+)/m)?.[1] || chunk.match(/^ACCESSION\s+(\S+)/m)?.[1] || '';
     const definition = (chunk.match(/^DEFINITION\s+([\s\S]*?)\n(?=\S)/m)?.[1] || '').replace(/\s+/g, ' ').trim();
+    const comment = (chunk.match(/^COMMENT\s+([\s\S]*?)\n(?=\S)/m)?.[1] || '').replace(/\s+/g, ' ').trim();
     const origin = chunk.split(/^ORIGIN.*$/m)[1] || '';
     const seq = origin.replace(/[^A-Za-z]/g, '').toUpperCase();
 
@@ -55,7 +57,7 @@ export function parseGenBank(text) {
       for (const k of Object.keys(f.qualifiers)) f.qualifiers[k] = f.qualifiers[k].map(v => v.replace(/"$/, '').trim());
       Object.assign(f, parseLocation(f.location));
     }
-    records.push({ accession, definition, seq, features });
+    records.push({ accession, definition, comment, seq, features });
   }
   if (!records.length) throw new Error('Aucun enregistrement GenBank reconnu');
   return records;
@@ -78,6 +80,17 @@ export function listTranscripts(record) {
     });
   }
   return out;
+}
+
+/**
+ * Transcrit à proposer par défaut : MANE Select s'il est signalé (note du mRNA ou commentaire
+ * de l'enregistrement), sinon le premier décrit (transcrit de référence de RefSeqGene).
+ */
+export function preferredTranscript(record, transcripts) {
+  const tagged = transcripts.find(t => /MANE Select/i.test(t.note));
+  if (tagged) return tagged;
+  const m = (record.comment || '').match(/MANE Select[^.;]*?(NM_\d+\.\d+)/i);
+  return transcripts.find(t => t.id === m?.[1]) || transcripts[0] || null;
 }
 
 /** CDS (1-based, coordonnées du transcrit) d'un enregistrement NM_. */
@@ -172,22 +185,60 @@ export async function searchRefSeqGene(gene) {
   const ids = search?.idlist || [];
   if (!ids.length) return [];
   const summary = JSON.parse(await eutils('esummary.fcgi', { db: 'nuccore', id: ids.join(','), retmode: 'json' })).result;
+  // Un NG_ voisin peut citer le gène recherché (ex. ZAR1L pour BRCA2) : on place d'abord ceux
+  // dont le titre porte le symbole exact « (GENE) ».
+  const exact = new RegExp(`\\(${gene.replace(/[.-]/g, '\\$&')}\\)`, 'i');
   return (summary.uids || [])
     .map(id => ({ accession: summary[id]?.accessionversion || '', title: summary[id]?.title || '' }))
-    .filter(x => /^NG_\d+\.\d+$/.test(x.accession));
+    .filter(x => /^NG_\d+\.\d+$/.test(x.accession))
+    .map(x => ({ ...x, exact: exact.test(x.title) }))
+    .sort((a, b) => b.exact - a.exact);
 }
 
 /** Télécharge un enregistrement GenBank texte et vérifie l'accession retournée. */
 export async function fetchGenBank(accession) {
   if (!/^(NG|NM|NC|NR)_\d+\.\d+$/.test(accession)) throw new Error('Accession versionnée attendue (ex. NG_012772.3)');
-  const [record] = parseGenBank(await eutils('efetch.fcgi', { db: 'nuccore', id: accession, rettype: 'gbwithparts', retmode: 'text' }));
+  // Une accession versionnée est immuable : on la garde dans le navigateur après le premier téléchargement.
+  const cached = await cacheGet('gb:' + accession);
+  const text = cached || await eutils('efetch.fcgi', { db: 'nuccore', id: accession, rettype: 'gbwithparts', retmode: 'text' });
+  const [record] = parseGenBank(text);
   if (record.accession !== accession) throw new Error(`NCBI a retourné ${record.accession} au lieu de ${accession}`);
+  if (!cached) await cachePut('gb:' + accession, text);
+  record.fromCache = Boolean(cached);
   return record;
+}
+
+/**
+ * Trouve et charge le RefSeqGene d'un gène humain avec son transcrit de référence, en un appel.
+ * La correspondance gène → NG_ est mémorisée 30 jours (les versions NG_ évoluent rarement).
+ */
+export async function loadGene(gene, onProgress = () => {}) {
+  const symbol = gene.trim().toUpperCase();
+  const key = 'gene:' + symbol;
+  let entry = await cacheGet(key);
+  if (!entry || Date.now() - entry.date > 30 * 86400e3) {
+    onProgress(`Recherche du RefSeqGene de ${symbol} sur NCBI…`);
+    const hits = await searchRefSeqGene(symbol);
+    const hit = hits.find(h => h.exact);
+    if (!hit) throw new Error(hits.length ? `aucun RefSeqGene intitulé « (${symbol}) » (résultats : ${hits.map(h => h.accession).join(', ')})` : `aucun RefSeqGene trouvé pour ${symbol}`);
+    entry = { accession: hit.accession, title: hit.title, date: Date.now() };
+    await cachePut(key, entry);
+  }
+  onProgress(`Chargement de ${entry.accession}…`);
+  const ng = await fetchGenBank(entry.accession);
+  const transcript = preferredTranscript(ng, listTranscripts(ng));
+  if (transcript) onProgress(`Chargement du transcrit ${transcript.id}…`);
+  return referenceFromRecord(ng, transcript?.id || null);
 }
 
 /** Charge une référence NG_ et, si demandé, un transcrit NM_ (CDS et vérification de séquence). */
 export async function loadRefSeqGene(ngAccession, nmAccession = null) {
-  const ng = await fetchGenBank(ngAccession);
+  return referenceFromRecord(await fetchGenBank(ngAccession), nmAccession);
+}
+
+/** Référence à partir d'un enregistrement NG_ déjà chargé et d'un transcrit (NM_ téléchargé pour le CDS). */
+export async function referenceFromRecord(ng, nmAccession = null) {
+  const ngAccession = ng.accession;
   const transcripts = listTranscripts(ng);
   let transcript = null, cds = null, nmSeq = null;
   const warnings = [];
@@ -203,7 +254,7 @@ export async function loadRefSeqGene(ngAccession, nmAccession = null) {
       warnings.push(`NM_ non téléchargé (${e.message}) : CDS déduit des annotations de ${ngAccession}.`);
     }
   }
-  const ref = buildReference({ accession: ng.accession, seq: ng.seq, definition: ng.definition, transcript, cds, nmSeq, source: 'NCBI RefSeqGene' });
+  const ref = buildReference({ accession: ng.accession, seq: ng.seq, definition: ng.definition, transcript, cds, nmSeq, source: ng.fromCache ? 'NCBI RefSeqGene (mémorisé dans ce navigateur)' : 'NCBI RefSeqGene' });
   ref.warnings.unshift(...warnings);
   ref.transcripts = transcripts;
   ref.record = ng;
