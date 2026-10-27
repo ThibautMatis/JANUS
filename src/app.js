@@ -2,7 +2,7 @@
 
 import { parseABIF } from './abif.js';
 import { analyzeRead, mergeCalls } from './decompose.js';
-import { searchRefSeqGene, fetchGenBank, listTranscripts, loadRefSeqGene, referenceFromFasta, referenceFromGenBank } from './reference.js';
+import { fetchGenBank, loadGene, referenceFromRecord, referenceFromFasta, referenceFromGenBank, preferredTranscript, listTranscripts } from './reference.js';
 import { complement } from './sequence.js';
 import { TraceView } from './trace-view.js';
 
@@ -60,7 +60,7 @@ function setReference(ref) {
   if (state.results.length) setStatus('readStatus', 'Référence modifiée : relancez l’analyse.');
 }
 
-function fillTranscripts(transcripts, preferred = '') {
+function fillTranscripts(transcripts, selected = '') {
   const select = $('nmSelect');
   select.replaceChildren();
   select.append(option('', '— aucun (nomenclature g.) —'));
@@ -68,53 +68,51 @@ function fillTranscripts(transcripts, preferred = '') {
     const label = `${t.id}${t.product ? ' — ' + t.product.slice(0, 80) : ''}${/MANE Select/i.test(t.note) ? ' · MANE Select' : ''}`;
     select.append(option(t.id, label));
   }
-  const mane = transcripts.find(t => /MANE Select/i.test(t.note));
-  select.value = preferred && transcripts.some(t => t.id === preferred) ? preferred : (mane?.id || transcripts[0]?.id || '');
-  select.disabled = false;
-  $('useTranscript').disabled = false;
+  select.value = selected;
+  select.disabled = !transcripts.length;
 }
 
-$('searchGene').addEventListener('click', async () => {
+/** Affiche une référence chargée depuis NCBI et sa liste de transcrits. */
+function showLoaded(ref) {
+  state.ngRecord = ref.record;
+  state.localGenBank = null;
+  fillTranscripts(ref.transcripts, ref.transcript?.id || '');
+  setReference(ref);
+}
+
+$('loadGene').addEventListener('click', async () => {
   const gene = $('gene').value.trim();
-  setStatus('refStatus', `Recherche des RefSeqGene de ${gene}…`);
+  if (!gene) return setStatus('refStatus', 'Saisissez un symbole de gène (ex. BRCA2).', true);
   try {
-    const hits = await searchRefSeqGene(gene);
-    const select = $('ngSelect');
-    select.replaceChildren();
-    if (!hits.length) throw new Error('aucun enregistrement NG_ trouvé pour ce gène');
-    for (const h of hits) select.append(option(h.accession, `${h.accession} — ${h.title.slice(0, 90)}`));
-    $('ngAccession').value = hits[0].accession;
-    setStatus('refStatus', `${hits.length} enregistrement(s) RefSeqGene. Vérifiez l’accession puis cliquez sur « Charger ».`);
+    showLoaded(await loadGene(gene, text => setStatus('refStatus', text)));
+    try { localStorage.setItem('svib.gene', gene); } catch { /* facultatif */ }
   } catch (e) {
-    setStatus('refStatus', `Recherche impossible : ${e.message}. Saisissez une accession NG_ ou utilisez un fichier local.`, true);
+    setStatus('refStatus', `Chargement impossible : ${e.message}. Vous pouvez saisir une accession NG_ précise ou importer un fichier local.`, true);
   }
 });
-
-$('ngSelect').addEventListener('change', e => { if (e.target.value) $('ngAccession').value = e.target.value; });
+$('gene').addEventListener('keydown', e => { if (e.key === 'Enter') $('loadGene').click(); });
+try { const last = localStorage.getItem('svib.gene'); if (last) $('gene').value = last; } catch { /* facultatif */ }
 
 $('loadNg').addEventListener('click', async () => {
   const acc = $('ngAccession').value.trim().toUpperCase();
-  setStatus('refStatus', `Téléchargement de ${acc}…`);
+  setStatus('refStatus', `Chargement de ${acc}…`);
   try {
     const record = await fetchGenBank(acc);
-    state.ngRecord = record;
-    state.localGenBank = null;
-    const transcripts = listTranscripts(record);
-    fillTranscripts(transcripts);
-    setStatus('refStatus', `${acc} chargé (${record.seq.length.toLocaleString('fr-FR')} nt, ${transcripts.length} transcrit(s)). Choisissez le transcrit de référence puis « Utiliser ce transcrit ».`);
+    const t = preferredTranscript(record, listTranscripts(record));
+    showLoaded(await referenceFromRecord(record, t?.id || null));
   } catch (e) {
     setStatus('refStatus', `Chargement impossible : ${e.message}`, true);
   }
 });
 
-$('useTranscript').addEventListener('click', async () => {
+// Changer de transcrit reconstruit la référence (le NM_ est téléchargé une seule fois puis mémorisé).
+$('nmSelect').addEventListener('change', async () => {
   const nm = $('nmSelect').value || null;
   try {
-    if (state.localGenBank) {
-      setReference(referenceFromGenBank(state.localGenBank, nm));
-    } else if (state.ngRecord) {
-      setStatus('refStatus', nm ? `Téléchargement de ${nm} (CDS)…` : 'Construction de la référence…');
-      setReference(await loadRefSeqGene(state.ngRecord.accession, nm));
+    if (state.localGenBank) setReference(referenceFromGenBank(state.localGenBank, nm));
+    else if (state.ngRecord) {
+      setStatus('refStatus', nm ? `Chargement du transcrit ${nm}…` : 'Construction de la référence…');
+      setReference(await referenceFromRecord(state.ngRecord, nm));
     }
   } catch (e) {
     setStatus('refStatus', `Erreur : ${e.message}`, true);
@@ -132,7 +130,7 @@ $('loadRefFile').addEventListener('click', async () => {
       state.ngRecord = null;
       fillTranscripts(ref.transcripts);
       setReference(ref);
-      if (ref.transcripts.length) setStatus('refStatus', describeReference(ref) + '\nChoisissez un transcrit puis « Utiliser ce transcrit » pour les coordonnées c.');
+      if (ref.transcripts.length) setStatus('refStatus', describeReference(ref) + '\nChoisissez un transcrit pour les coordonnées c.');
     } else {
       setReference(referenceFromFasta(text));
     }
@@ -164,7 +162,7 @@ $('analyze').addEventListener('click', async () => {
       read.name = file.name;
       results.push(analyzeRead(read, state.ref, options()));
     } catch (e) {
-      errors.push(`${file.name} : ${e.message}`);
+      errors.push(e.message.startsWith(file.name) ? e.message : `${file.name} : ${e.message}`);
     }
   }
   state.results = results;

@@ -21,15 +21,17 @@
       <p class="note">Les lectures Sanger sur ADN génomique couvrent exons et introns : l’analyse se fait sur l’enregistrement RefSeqGene (NG_) du gène, et le transcrit NM_ sert aux coordonnées c.</p>
       <div class="controls">
         <label>Gène <input id="gene" value="BRCA2" placeholder="BRCA2, TP53…" autocomplete="off" spellcheck="false"></label>
-        <button id="searchGene" type="button">Rechercher</button>
-        <label>RefSeqGene <select id="ngSelect"><option value="">—</option></select></label>
+        <button id="loadGene" type="button" class="primary">Charger</button>
+        <label>Transcrit <select id="nmSelect" disabled><option value="">Chargez d’abord un gène</option></select></label>
       </div>
-      <div class="controls">
-        <label>Accession NG_ <input id="ngAccession" placeholder="NG_012772.3" spellcheck="false"></label>
-        <button id="loadNg" type="button">Charger</button>
-        <label>Transcrit <select id="nmSelect" disabled><option value="">Chargez d’abord un NG_</option></select></label>
-        <button id="useTranscript" type="button" disabled>Utiliser ce transcrit</button>
-      </div>
+      <details>
+        <summary>Accession NG_ précise</summary>
+        <p class="note">Pour imposer un enregistrement RefSeqGene (ex. une version antérieure).</p>
+        <div class="controls">
+          <label>Accession NG_ <input id="ngAccession" placeholder="NG_012772.3" spellcheck="false"></label>
+          <button id="loadNg" type="button">Charger cet NG_</button>
+        </div>
+      </details>
       <details>
         <summary>Sans connexion à NCBI : fichier GenBank ou FASTA local</summary>
         <p class="note">Un fichier GenBank NG_ (téléchargé depuis NCBI, format « GenBank (full) ») conserve les exons et le CDS. Un FASTA ne permet que la nomenclature g.</p>
