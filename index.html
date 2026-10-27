@@ -67,7 +67,17 @@
     <section class="card" id="step-results">
       <h2><span class="num">3</span> Variants</h2>
       <div class="scroll"><table id="variantTable">
-        <thead><tr><th>HGVS c.</th><th>HGVS p.</th><th>HGVS g.</th><th>Type</th><th>Génotype</th><th>Fraction</th><th>Statut</th><th>gnomAD v4</th><th>Lectures</th></tr></thead>
+        <thead><tr>
+          <th data-sort="position" aria-sort="ascending"><button type="button">HGVS c.</button></th>
+          <th data-sort="protein"><button type="button">HGVS p.</button></th>
+          <th data-sort="position"><button type="button">HGVS g.</button></th>
+          <th data-sort="type"><button type="button">Type</button></th>
+          <th data-sort="genotype"><button type="button">Génotype</button></th>
+          <th data-sort="fraction"><button type="button">Fraction</button></th>
+          <th data-sort="status"><button type="button">Statut</button></th>
+          <th data-sort="gnomad"><button type="button">gnomAD v4</button></th>
+          <th data-sort="reads"><button type="button">Lectures</button></th>
+        </tr></thead>
         <tbody><tr><td colspan="9" class="empty">Aucune analyse.</td></tr></tbody>
       </table></div>
       <div class="controls">

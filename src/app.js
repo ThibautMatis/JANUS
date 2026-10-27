@@ -254,6 +254,44 @@ function statusTag(v) {
   return tag('non retrouvé sur l’autre lecture', 'bad');
 }
 
+// Tri du tableau des variants : clic sur un en-tête (une seconde fois pour inverser l'ordre).
+const sort = { key: 'position', dir: 1 };
+const STATUS_ORDER = { 'confirmé F/R': 0, 'une seule lecture': 1, 'non retrouvé sur l’autre lecture': 2 };
+const meanFraction = v => {
+  const f = v.reads.map(x => x.alleleFraction).filter(Number.isFinite);
+  return f.length ? f.reduce((a, b) => a + b, 0) / f.length : null;
+};
+// Valeur de tri ; null = inconnue, toujours rangée en fin de tableau.
+const SORT_VALUE = {
+  position: v => v.pos,
+  protein: v => { const m = v.protein?.short?.match(/(\d+)/); return m ? Number(m[1]) : null; },
+  type: v => TYPE_LABEL[v.type] || v.type,
+  genotype: v => v.genotype,
+  fraction: meanFraction,
+  status: v => STATUS_ORDER[v.status] ?? 3,
+  gnomad: v => (v.gnomad?.freq ? v.gnomad.freq.af : v.gnomad?.freq === null ? 0 : null),
+  reads: v => v.reads.length + v.supportedBy.length,
+};
+
+function sortedVariants() {
+  const value = SORT_VALUE[sort.key];
+  return state.merged.slice().sort((a, b) => {
+    const x = value(a), y = value(b);
+    if (x === null || y === null) return x === y ? a.pos - b.pos : x === null ? 1 : -1;
+    const d = typeof x === 'string' ? x.localeCompare(y, 'fr') : x - y;
+    return d ? sort.dir * d : a.pos - b.pos;
+  });
+}
+
+$('variantTable').querySelectorAll('th[data-sort]').forEach(th => th.querySelector('button').addEventListener('click', () => {
+  const key = th.dataset.sort;
+  sort.dir = sort.key === key ? -sort.dir : 1;
+  sort.key = key;
+  $('variantTable').querySelectorAll('th[data-sort]').forEach(h => h.removeAttribute('aria-sort'));
+  th.setAttribute('aria-sort', sort.dir === 1 ? 'ascending' : 'descending');
+  renderVariants();
+}));
+
 function renderVariants() {
   const body = $('variantTable').querySelector('tbody');
   body.replaceChildren();
@@ -266,7 +304,7 @@ function renderVariants() {
     body.append(tr);
     return;
   }
-  for (const v of state.merged) {
+  for (const v of sortedVariants()) {
     const tr = document.createElement('tr');
     tr.className = 'clickable';
     cell(tr, v.names.c ? v.names.c.split(':')[1] : '—', 'mono');
@@ -322,7 +360,7 @@ function showVariant(v) {
 
 $('exportCsv').addEventListener('click', () => {
   const header = ['HGVS_c', 'HGVS_p', 'consequence', 'HGVS_g', 'GRCh38', 'gnomAD_AF', 'gnomAD_AC_AN', 'type', 'genotype', 'statut', 'lectures', 'fractions', 'arguments'];
-  const rows = state.merged.map(v => [
+  const rows = sortedVariants().map(v => [ // dans l’ordre affiché
     v.names.c || '', v.protein?.name || '', v.protein?.effect || '', v.names.g, v.gnomad?.id || '',
     v.gnomad?.freq ? v.gnomad.freq.af : v.gnomad?.freq === null ? 0 : '',
     v.gnomad?.freq ? `${v.gnomad.freq.ac}/${v.gnomad.freq.an}` : '',
