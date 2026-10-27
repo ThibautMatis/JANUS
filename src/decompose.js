@@ -119,9 +119,10 @@ export function analyzeRead(read, ref, options = {}) {
   for (const call of calls.values()) {
     const v = assess(call, seqCols, prof, opt, reverse);
     if (!v) continue;
-    // Base de la lecture d'origine (1-based) au variant normalisé, pour la navigation.
-    const anchorPos = v.type === 'dup' || v.type === 'ins' ? v.pos - 1 : v.pos;
-    const col = seqCols.find(c => c.t !== null && c.t + winStart === anchorPos);
+    // Base de la lecture d'origine (1-based) pour la navigation : point de rupture visible, c'est-à-dire
+    // la première base où les deux allèles diffèrent dans le sens de lecture. Pour un indel dans une
+    // répétition ou lu en Reverse, ce n'est pas la position HGVS (décalée en 3′ sur la référence).
+    const col = breakpointColumn(v, model, seqCols, winStart, reverse, ref.seq);
     const qi = col ? col.q : Math.min(Math.max(0, call.qFirst === Infinity ? call.qAfter : call.qFirst), prof.length - 1);
     v.readBase = prof[qi].index + 1;
     v.names = hgvsNames(v, ref);
@@ -152,6 +153,14 @@ export function analyzeRead(read, ref, options = {}) {
     /** Score d'ajustement de la lecture sous l'hypothèse d'un allèle 2 portant `vars`. */
     explain: vars => model.fit(vars, model.A, model.B),
   };
+}
+
+/** Colonne (dans le sens de lecture) où l'allèle portant `v` commence à différer de la référence. */
+function breakpointColumn(v, model, seqCols, winStart, reverse, seq) {
+  const at = model.predict([v]);
+  const cols = seqCols.filter(c => c.t !== null);
+  if (reverse) cols.reverse();
+  return cols.find(c => { const alt = at(winStart + c.t); return alt !== null && alt !== seq[winStart + c.t]; }) || null;
 }
 
 const median = a => { const b = a.slice().sort((x, y) => x - y); return b.length ? b[Math.floor(b.length / 2)] : 0; };
