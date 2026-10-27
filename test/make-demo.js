@@ -7,11 +7,19 @@ import { revcomp } from '../src/sequence.js';
 
 const SEQ = randomSeq(6000, rng(2024));
 const exons = [[201, 400], [1001, 1300], [2001, 2600], [3001, 3800]];
-const cds = [[249, 400], [1001, 1300], [2001, 2600], [3001, 3149]];
+const cds = [[249, 400], [1001, 1300], [2001, 2600], [3001, 3151]]; // 1203 nt = 401 codons
 // Force un ATG au début du CDS et un codon stop à la fin, pour un transcrit plausible.
 const chars = SEQ.split('');
 chars.splice(248, 3, 'A', 'T', 'G');
-chars.splice(3146, 3, 'T', 'A', 'A');
+chars.splice(3148, 3, 'T', 'A', 'A');
+// Cadre de lecture ouvert : les codons stop internes du CDS sont remplacés (TGG, Trp).
+{
+  const pos = cds.flatMap(([a, b]) => Array.from({ length: b - a + 1 }, (_, i) => a - 1 + i));
+  for (let i = 0; i + 3 < pos.length - 3; i += 3) {
+    const codon = pos.slice(i, i + 3).map(p => chars[p]).join('');
+    if (['TAA', 'TAG', 'TGA'].includes(codon)) pos.slice(i, i + 3).forEach((p, j) => { chars[p] = 'TGG'[j]; });
+  }
+}
 const seq = chars.join('');
 
 const join = iv => `join(${iv.map(([a, b]) => `${a}..${b}`).join(',')})`;

@@ -97,7 +97,7 @@ export function preferredTranscript(record, transcripts) {
 export function cdsOfTranscript(record) {
   const cds = record.features.find(f => f.key === 'CDS');
   if (!cds || cds.complement || !cds.intervals.length) return null;
-  return { cdsStart: cds.intervals[0][0], cdsEnd: cds.intervals.at(-1)[1] };
+  return { cdsStart: cds.intervals[0][0], cdsEnd: cds.intervals.at(-1)[1], proteinId: cds.qualifiers?.protein_id?.[0] || '' };
 }
 
 /**
