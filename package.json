@@ -1,0 +1,10 @@
+{
+  "name": "svib",
+  "version": "8.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Appel de variants et déconvolution d'allèles sur chromatogrammes Sanger, dans le navigateur",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}
