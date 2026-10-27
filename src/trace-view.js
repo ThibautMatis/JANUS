@@ -6,9 +6,12 @@ const COLORS = { A: '#1a8a4f', C: '#2463c7', G: '#30353b', T: '#d0383a' };
 const OTHER = '#8c60a7';
 
 export class TraceView {
-  constructor(canvas, { onSelect } = {}) {
+  /** onSelect(k) : clic sur une base ; label(k) → [titre, détail] affichés au survol (barre verticale). */
+  constructor(canvas, { onSelect, label } = {}) {
     this.canvas = canvas;
     this.onSelect = onSelect;
+    this.label = label;
+    this.hover = null;
     this.read = null;
     this.start = 0;
     this.count = 45;
@@ -138,6 +141,45 @@ export class TraceView {
     ctx.fillStyle = muted;
     ctx.fillText('Lecture', 4, yBase);
     if (rows) ['Réf.', 'Allèle 1', 'Allèle 2'].forEach((t, r) => ctx.fillText(t, 4, yBase + labelH + r * rowH));
+
+    if (this.hover !== null && this.hover >= this.start && this.hover < end) this.drawHover(ctx, X(read.positions[this.hover]), W, H, css, accent);
+  }
+
+  /** Barre verticale sur la base survolée et étiquette (position c., détail). */
+  drawHover(ctx, x, W, H, css, accent) {
+    ctx.save();
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.moveTo(Math.round(x) + 0.5, 0);
+    ctx.lineTo(Math.round(x) + 0.5, H);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    const [title, detail] = this.label ? this.label(this.hover) : [`base ${this.hover + 1}`, ''];
+    ctx.font = '700 13px ui-monospace, SFMono-Regular, Menlo, monospace';
+    const w1 = ctx.measureText(title).width;
+    ctx.font = '11px system-ui, sans-serif';
+    const w2 = detail ? ctx.measureText(detail).width : 0;
+    const bw = Math.max(w1, w2) + 16, bh = detail ? 38 : 22;
+    const bx = Math.min(Math.max(2, x + 8), W - bw - 2), by = 4;
+    ctx.fillStyle = css.getPropertyValue('--card').trim() || '#fff';
+    ctx.strokeStyle = accent;
+    ctx.beginPath();
+    ctx.roundRect ? ctx.roundRect(bx, by, bw, bh, 5) : ctx.rect(bx, by, bw, bh);
+    ctx.fill();
+    ctx.stroke();
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = css.getPropertyValue('--text').trim() || '#17293a';
+    ctx.font = '700 13px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx.fillText(title, bx + 8, by + 11);
+    if (detail) {
+      ctx.font = '11px system-ui, sans-serif';
+      ctx.fillStyle = css.getPropertyValue('--muted').trim() || '#647587';
+      ctx.fillText(detail, bx + 8, by + 28);
+    }
+    ctx.restore();
   }
 
   baseAt(clientX) {
@@ -161,7 +203,14 @@ export class TraceView {
       c.setPointerCapture(e.pointerId);
     });
     c.addEventListener('pointermove', e => {
-      if (!drag) return;
+      if (!drag) {
+        // Survol à la souris : barre verticale et position de la base (pas au doigt, réservé au glisser).
+        if (e.pointerType === 'touch' || !this.read) return;
+        const k = this.baseAt(e.clientX);
+        if (k !== this.hover) { this.hover = k; this.draw(); }
+        return;
+      }
+      if (this.hover !== null) this.hover = null;
       const dx = e.clientX - drag.x;
       if (Math.abs(dx) > 3) drag.moved = true;
       if (drag.moved) this.show(drag.start - (dx / c.clientWidth) * this.count, this.count);
@@ -172,6 +221,9 @@ export class TraceView {
         if (k !== null) this.onSelect(k);
       }
       drag = null;
+    });
+    c.addEventListener('pointerleave', () => {
+      if (this.hover !== null) { this.hover = null; this.draw(); }
     });
     c.addEventListener('wheel', e => {
       if (!this.read) return;

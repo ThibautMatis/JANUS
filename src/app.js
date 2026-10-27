@@ -343,7 +343,18 @@ $('exportCsv').addEventListener('click', () => {
 // ---------------------------------------------------------------------------
 // 4. Chromatogramme
 
-const view = new TraceView($('trace'), { onSelect: k => describeBase(k) });
+const view = new TraceView($('trace'), { onSelect: k => describeBase(k), label: k => hoverLabel(k) });
+
+/** Étiquette de survol : position c. (sinon g.) en titre, puis g., base de la lecture et allèles. */
+function hoverLabel(k) {
+  const r = view.result, a = view.annotationMap?.get(k);
+  if (!r || !a?.g) return [`base ${k + 1}`, k < r?.trim[0] || k >= r?.trim[1] ? 'hors de la zone analysée' : 'non alignée sur la référence'];
+  const c = state.ref.mapper ? `c.${state.ref.mapper.c(a.g)}` : null;
+  const alleles = a.a1 === a.a2 ? `${a.a1}` : `${a.a1}/${a.a2}`;
+  // Bases dans le sens de la lecture, comme sous les pics : complémentaires du transcrit sur une Reverse.
+  const strand = r.strand === '-' ? ' (brin −)' : '';
+  return [c || `g.${a.g}`, [c ? `g.${a.g}` : null, `base ${k + 1}`, `réf. ${a.ref}`, `allèles ${alleles}${strand}`].filter(Boolean).join(' · ')];
+}
 
 /** Annotations par base d'origine : référence et allèles, dans le sens de la lecture. */
 function annotationsOf(result) {
