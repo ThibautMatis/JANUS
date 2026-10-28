@@ -129,6 +129,16 @@ export class TraceView {
             ctx.fillText(b, x, yBase + labelH + r * rowH);
             ctx.font = '12px ui-monospace, SFMono-Regular, Menlo, monospace';
           });
+          // Base(s) de référence sautée(s) par l'alignement : repère ▾ entre deux bases, ligne Réf.
+          if (a.skipped) {
+            const nb = a.skippedSide === 'before' ? k - 1 : k + 1;
+            const xn = nb >= 0 && nb < read.bases.length ? X(read.positions[nb]) : x + (a.skippedSide === 'before' ? -10 : 10);
+            const xm = (x + xn) / 2;
+            ctx.fillStyle = accent;
+            ctx.font = '700 11px system-ui, sans-serif';
+            ctx.fillText(a.skipped.length > 1 ? `▾${a.skipped.length}` : '▾', xm, yBase + labelH - 9);
+            ctx.font = '12px ui-monospace, SFMono-Regular, Menlo, monospace';
+          }
         }
       }
       if ((k + 1) % step === 0) {

@@ -155,3 +155,20 @@ test('lecture commençant dans la zone décalée : confirmation par le modèle',
   assert.equal(merged[0].status, 'confirmé F/R');
   assert.deepEqual(merged[0].supportedBy.map(s => s.name), ['F']);
 });
+
+test('délétion d’un G dans un GGG, allèle muté majoritaire : pas de duplication « miroir »', () => {
+  // Type BRCA2 c.6841+1del : si l'alignement suit l'allèle délété, l'allèle normal ressemble à une
+  // duplication et le variant est nommé à l'envers. Cas qui échouait (fraction 70 %, graine 4).
+  const motif = 'ACTTATCTTAGTGGGTAAGTGTTCATTTTTACCTT';
+  const seq = (() => { const s = randomSeq(6000, rng(31)); return s.slice(0, 2280) + motif + s.slice(2280 + motif.length); })();
+  const ref = buildReference({ accession: 'NG_G.1', seq });
+  const g = 2280 + motif.indexOf('GGG') + 2;
+  const wt = seq.slice(1849, 2650), i = g - 1849, mut = wt.slice(0, i) + wt.slice(i + 1);
+  const opts = { length: 700, heightVar: 0.45, noise: 15 };
+  const F = simulate([wt.slice(20), mut.slice(20)], [0.3, 0.7], { ...opts, seed: 4 });
+  const R = simulate([revcomp(wt).slice(20), revcomp(mut).slice(20)], [0.3, 0.7], { ...opts, seed: 54 });
+  F.name = 'F'; R.name = 'R';
+  const merged = mergeCalls([F, R].map(r => analyzeRead(r, ref)), ref);
+  assert.deepEqual(merged.map(m => m.names.g), [`NG_G.1:g.${g + 1}del`]);
+  assert.equal(merged[0].status, 'confirmé F/R');
+});

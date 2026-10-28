@@ -399,17 +399,24 @@ function hoverLabel(k) {
   const alleles = a.a1 === a.a2 ? `${a.a1}` : `${a.a1}/${a.a2}`;
   // Bases dans le sens de la lecture, comme sous les pics : complémentaires du transcrit sur une Reverse.
   const strand = r.strand === '-' ? ' (brin −)' : '';
-  return [c || `g.${a.g}`, [c ? `g.${a.g}` : null, `base ${k + 1}`, `réf. ${a.ref}`, `allèles ${alleles}${strand}`].filter(Boolean).join(' · ')];
+  const gap = a.skipped ? `${a.skipped.length} base(s) de référence (${a.skipped}) sans pic ${a.skippedSide === 'before' ? 'juste avant' : 'juste après'}` : null;
+  return [c || `g.${a.g}`, [c ? `g.${a.g}` : null, `base ${k + 1}`, `réf. ${a.ref}`, `allèles ${alleles}${strand}`, gap].filter(Boolean).join(' · ')];
 }
 
 /** Annotations par base d'origine : référence et allèles, dans le sens de la lecture. */
 function annotationsOf(result) {
   const map = new Map(), flip = result.strand === '-';
   const show = b => (flip && b !== '-' ? complement(b) : b);
+  // Bases de référence sans pic en face (gap de l'alignement) : rattachées à la base lue voisine, côté
+  // gap dans le sens de lecture (avant elle en Forward, après elle en Reverse), pour rester visibles.
+  let skipped = '';
   for (const c of result.cols) {
-    if (c.q === null) continue;
+    if (c.q === null) { skipped += c.ref; continue; }
     const index = result.profile[c.q].index;
-    map.set(index, { ref: show(c.ref), a1: show(c.a1), a2: show(c.a2), g: c.t !== null ? result.winStart + c.t + 1 : null });
+    const a = { ref: show(c.ref), a1: show(c.a1), a2: show(c.a2), g: c.t !== null ? result.winStart + c.t + 1 : null };
+    if (skipped) { a.skipped = flip ? [...skipped].reverse().map(complement).join('') : skipped; a.skippedSide = flip ? 'after' : 'before'; }
+    skipped = '';
+    map.set(index, a);
   }
   return map;
 }
