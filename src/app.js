@@ -10,6 +10,7 @@ import { NAME, releaseLabel } from './version.js';
 
 document.getElementById('release').textContent = releaseLabel();
 import { proteinName } from './protein.js';
+import { variantLocation } from './hgvs.js';
 import { genomicMapping, gnomadId, gnomadFrequencies, gnomadUrl } from './gnomad.js';
 
 const $ = id => document.getElementById(id);
@@ -178,7 +179,7 @@ $('analyze').addEventListener('click', async () => {
   $('gnomadStatus').hidden = true;
   // Une lecture illisible n'apporte que du bruit : ni appels, ni confirmation.
   state.merged = mergeCalls(results.filter(r => r.quality.verdict !== 'illisible'), state.ref);
-  for (const v of state.merged) v.protein = proteinName(v, state.ref);
+  for (const v of state.merged) { v.protein = proteinName(v, state.ref); v.location = variantLocation(v, state.ref.mapper); }
   renderReads();
   renderVariants();
   renderTraceSelect();
@@ -305,7 +306,7 @@ function renderVariants() {
   $('variantDetail').hidden = true;
   if (!state.merged.length) {
     const tr = document.createElement('tr');
-    cell(tr, state.results.length ? 'Aucun variant détecté. Un résultat vide n’exclut pas un variant.' : 'Aucune analyse.', 'empty').colSpan = 9;
+    cell(tr, state.results.length ? 'Aucun variant détecté. Un résultat vide n’exclut pas un variant.' : 'Aucune analyse.', 'empty').colSpan = 10;
     body.append(tr);
     return;
   }
@@ -313,6 +314,7 @@ function renderVariants() {
     const tr = document.createElement('tr');
     tr.className = 'clickable';
     cell(tr, v.names.c ? v.names.c.split(':')[1] : '—', 'mono');
+    cell(tr, v.location || '—');
     const p = cell(tr, v.protein?.short || '—', 'mono');
     p.title = v.protein?.effect || '';
     cell(tr, v.names.g.split(':')[1], 'mono');
@@ -341,6 +343,7 @@ function showVariant(v) {
   const lines = [
     v.names.c || v.names.g,
     v.protein?.name ? `${v.protein.name} · ${v.protein.effect}` : v.protein?.effect ? `Conséquence : ${v.protein.effect}` : '',
+    v.location ? `Localisation : ${v.location}` : '',
     v.names.c ? v.names.g : '',
     v.gnomad?.id ? `GRCh38 ${v.gnomad.id} · gnomAD v4 : ${formatFrequency(v.gnomad)}` : '',
     `${TYPE_LABEL[v.type] || v.type} · ${v.genotype} · ${v.status}`,
@@ -351,7 +354,7 @@ function showVariant(v) {
     ...v.reads.map(x => `${x.name} (${x.strand}) : base ${x.readBase} · ${x.evidence}${Number.isFinite(x.alleleFraction) ? ` · fraction ${Math.round(100 * x.alleleFraction)} %` : ''}${x.flags.length ? ' · ' + x.flags.join(', ') : ''}`),
     ...v.supportedBy.map(x => `${x.name} (${x.strand}) : non appelé directement, mais signal nettement mieux expliqué avec ce variant (gain d’ajustement ${Math.round(x.gain)})`),
     ...(v.missing.length ? [`Non retrouvé sur : ${v.missing.join(', ')} (lecture informative à cette position)`] : []),
-  ].filter((l, i) => l !== '' || i > 4);
+  ].filter((l, i) => l !== '' || i > 5);
   const detail = $('variantDetail');
   detail.textContent = lines.join('\n');
   detail.hidden = false;
@@ -364,9 +367,9 @@ function showVariant(v) {
 }
 
 $('exportCsv').addEventListener('click', () => {
-  const header = ['HGVS_c', 'HGVS_p', 'consequence', 'HGVS_g', 'GRCh38', 'gnomAD_AF', 'gnomAD_AC_AN', 'type', 'genotype', 'statut', 'lectures', 'fractions', 'arguments'];
+  const header = ['HGVS_c', 'localisation', 'HGVS_p', 'consequence', 'HGVS_g', 'GRCh38', 'gnomAD_AF', 'gnomAD_AC_AN', 'type', 'genotype', 'statut', 'lectures', 'fractions', 'arguments'];
   const rows = sortedVariants().map(v => [ // dans l’ordre affiché
-    v.names.c || '', v.protein?.name || '', v.protein?.effect || '', v.names.g, v.gnomad?.id || '',
+    v.names.c || '', v.location || '', v.protein?.name || '', v.protein?.effect || '', v.names.g, v.gnomad?.id || '',
     v.gnomad?.freq ? v.gnomad.freq.af : v.gnomad?.freq === null ? 0 : '',
     v.gnomad?.freq ? `${v.gnomad.freq.ac}/${v.gnomad.freq.an}` : '',
     v.type, v.genotype, v.status,
@@ -624,6 +627,7 @@ function renderReportPreview() {
       const fractions = v.reads.map(x => x.alleleFraction).filter(Number.isFinite).map(f => `${Math.round(100 * f)} %`).join(' / ');
       const rows = [
         ['Variant', v.names.c || v.names.g],
+        ['Localisation', v.location || '—'],
         ['Protéine (prédite)', v.protein?.name ? `${v.protein.name} — ${v.protein.effect}` : v.protein?.effect || '—'],
         ['Génomique', v.names.g + (v.gnomad?.id ? ` · GRCh38 ${v.gnomad.id}` : '')],
         ['Génotype', `${v.genotype}${fractions ? ` (fraction ${fractions})` : ''}`],
