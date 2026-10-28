@@ -23,6 +23,11 @@ export const DEFAULTS = {
   edge: 15,           // pas d'appel à moins de `edge` bases d'une extrémité de l'alignement
   snrMin: 4,          // pic secondaire d'un SNV ≥ snrMin × bruit de fond local
   minSignal: 0.08,    // signal minimal (fraction du pic primaire) pour corriger l'allèle 2
+  // Ouverture de gap de l'alignement du profil : élevée pour que l'alignement reste sur l'allèle de
+  // référence au point de rupture d'un indel hétérozygote (sinon, s'il suit l'allèle muté, l'indel
+  // est nommé à l'envers : duplication au lieu de délétion). Un indel homozygote, qui décale toute
+  // la suite de la lecture, paie largement ce coût.
+  profileGapOpen: -40,
   maxDeletion: 120,   // taille maximale des délétions recherchées au point de rupture (nt)
   maxInsertion: 40,   // taille maximale des insertions recherchées (nt)
   scanMinGain: 20,    // gain d'ajustement minimal pour retenir un indel trouvé par recherche du décalage
@@ -74,7 +79,7 @@ export function analyzeRead(read, ref, options = {}) {
     // sauter vers l'allèle muté là où ses pics dominent.
     if (x.primary === r || h(x, r) >= opt.minSignal * Math.max(...x.h)) return 3;
     return -4;
-  }, { gapOpen: -10, gapExtend: -2 });
+  }, { gapOpen: opt.profileGapOpen, gapExtend: -2 });
 
   // Séparation des allèles.
   const cols = [];
