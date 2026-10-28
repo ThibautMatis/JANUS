@@ -67,7 +67,15 @@ export function transcriptMapper({ exons, cdsStart, cdsEnd }) {
     }
     return '?';
   }
-  return { c, exonic, tLength, exons: ex };
+  /** Exon ou intron (numérotés dans l'ordre du transcrit) contenant la position génomique 1-based g. */
+  function region(g) {
+    for (let k = 0; k < ex.length; k++) {
+      if (g >= ex[k][0] && g <= ex[k][1]) return { kind: 'exon', n: k + 1 };
+      if (k + 1 < ex.length && g > ex[k][1] && g < ex[k + 1][0]) return { kind: 'intron', n: k + 1 };
+    }
+    return { kind: g < ex[0][0] ? 'amont' : 'aval', n: null };
+  }
+  return { c, exonic, region, tLength, exons: ex };
 }
 
 /** Description HGVS (sans préfixe) d'un variant normalisé ; `coord` convertit une position 1-based. */
@@ -88,4 +96,21 @@ export function hgvsNames(v, ref) {
   const g = `${ref.accession}:g.${describe(v, String)}`;
   const c = ref.mapper && ref.transcript ? `${ref.transcript.id}:c.${describe(v, ref.mapper.c)}` : null;
   return { g, c };
+}
+
+const regionLabel = r => (r.n ? `${r.kind} ${r.n}` : r.kind === 'amont' ? 'en amont du gène' : 'en aval du gène');
+
+/**
+ * Localisation d'un variant normalisé sur le transcrit : « exon 10 », « intron 9 »,
+ * ou « intron 1 – exon 2 » s'il chevauche une jonction. null sans transcrit.
+ */
+export function variantLocation(v, mapper) {
+  if (!mapper) return null;
+  const first = v.del.length ? v.pos + 1 : v.pos;          // insertion : entre v.pos et v.pos + 1
+  const last = v.del.length ? v.pos + v.del.length : v.pos + 1;
+  const a = mapper.region(first), b = mapper.region(last);
+  // Insertion à la limite exon/intron : on la rattache à l'exon.
+  if (!v.del.length && a.kind !== b.kind) return regionLabel(a.kind === 'exon' ? a : b);
+  const la = regionLabel(a), lb = regionLabel(b);
+  return la === lb ? la : `${la} – ${lb}`;
 }

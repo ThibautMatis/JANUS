@@ -93,3 +93,15 @@ test('CDS déduit des annotations génomiques', async () => {
   assert.deepEqual(cdsFromGenomic(record, { exons: [[5, 20], [31, 50]], strand: '+' }), { cdsStart: 6, cdsEnd: 26, proteinId: '' });
   assert.equal(cdsFromGenomic(record, { exons: [[5, 22], [31, 50]], strand: '+' }), null);
 });
+
+test('localisation exon / intron', async () => {
+  const { variantLocation } = await import('../src/hgvs.js');
+  const m = transcriptMapper({ exons: [[101, 200], [301, 400], [501, 600]], cdsStart: 51, cdsEnd: 250 });
+  assert.equal(variantLocation({ pos: 150, del: 'A', ins: 'G' }, m), 'exon 1');
+  assert.equal(variantLocation({ pos: 249, del: 'A', ins: 'G' }, m), 'intron 1');
+  assert.equal(variantLocation({ pos: 520, del: '', ins: 'T' }, m), 'exon 3');
+  // Délétion de l'intron 1 jusque dans l'exon 2 (type MSH2 c.212-25_239del).
+  assert.equal(variantLocation({ pos: 280, del: 'A'.repeat(40), ins: '' }, m), 'intron 1 – exon 2');
+  assert.equal(variantLocation({ pos: 50, del: 'A', ins: 'G' }, m), 'en amont du gène');
+  assert.equal(variantLocation({ pos: 450, del: 'A', ins: 'G' }, null), null);
+});
