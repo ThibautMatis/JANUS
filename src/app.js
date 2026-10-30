@@ -3,7 +3,7 @@
 import { parseABIF } from './abif.js';
 import { analyzeRead, mergeCalls } from './decompose.js';
 import { fetchGenBank, loadGene, referenceFromRecord, referenceFromFasta, referenceFromGenBank, preferredTranscript, listTranscripts } from './reference.js';
-import { complement } from './sequence.js';
+import { complement, revcomp } from './sequence.js';
 import { TraceView, snapshot } from './trace-view.js';
 import { CLASSES, classOf, conclusion, geneOf, analysedRegion } from './report.js';
 import { NAME, releaseLabel } from './version.js';
@@ -11,6 +11,7 @@ import { NAME, releaseLabel } from './version.js';
 document.getElementById('release').textContent = releaseLabel();
 import { proteinName } from './protein.js';
 import { variantLocation } from './hgvs.js';
+import { directCheck, explainDiscrepancy, explainShift } from './check.js';
 import { genomicMapping, gnomadId, gnomadFrequencies, gnomadUrl } from './gnomad.js';
 
 const $ = id => document.getElementById(id);
@@ -179,6 +180,8 @@ $('analyze').addEventListener('click', async () => {
   $('gnomadStatus').hidden = true;
   // Une lecture illisible n'apporte que du bruit : ni appels, ni confirmation.
   state.merged = mergeCalls(results.filter(r => r.quality.verdict !== 'illisible'), state.ref);
+  // Contrôle indépendant : bases du séquenceur alignées directement sur le génome.
+  for (const r of results) r.check = r.quality.verdict === 'illisible' ? null : directCheck(r, state.ref);
   for (const v of state.merged) { v.protein = proteinName(v, state.ref); v.location = variantLocation(v, state.ref.mapper); }
   renderReads();
   renderVariants();
@@ -232,11 +235,14 @@ function renderReads() {
     note.className = 'note';
     note.textContent = details.join(' · ');
     q.append(note);
+    const ck = checkSummary(r);
+    const cc = cell(tr, ck ? tag(ck.ok ? 'concordant' : 'à vérifier', ck.ok ? 'ok' : 'warn') : '—');
+    if (ck) cc.append(el('div', { class: 'note' }, ck.lines.join(' · ')));
     cell(tr, regionLabel(r), 'mono');
     cell(tr, `${r.alignedBases} / ${r.usableBases}`);
     cell(tr, `${Math.round(100 * r.mixedFraction)} %`);
     const shift = r.partial ? Math.abs(r.partial.ins.length - r.partial.del.length) : 0;
-    cell(tr, r.quality.verdict === 'illisible' ? 'ignorée' : String(r.variants.length) + (shift ? ` · décalage de ${shift} nt dès le début de la lecture` : ''));
+    cell(tr, r.quality.verdict === 'illisible' ? 'ignorée' : String(r.variants.length) + (shift ? ` · décalage d’environ ${shift} nt dès le début de la lecture (taille exacte donnée par l’autre lecture)` : ''));
     body.append(tr);
   }
   for (const f of state.failed) {
@@ -249,7 +255,7 @@ function renderReads() {
     note.className = 'note';
     note.textContent = f.reason;
     q.append(note);
-    cell(tr, '—'); cell(tr, '—'); cell(tr, '—'); cell(tr, 'ignorée');
+    cell(tr, '—'); cell(tr, '—'); cell(tr, '—'); cell(tr, '—'); cell(tr, 'ignorée');
     body.append(tr);
   }
 }
@@ -400,7 +406,8 @@ function hoverLabel(k) {
   // Bases dans le sens de la lecture, comme sous les pics : complémentaires du transcrit sur une Reverse.
   const strand = r.strand === '-' ? ' (brin −)' : '';
   const gap = a.skipped ? `${a.skipped.length} base(s) de référence (${a.skipped}) sans pic ${a.skippedSide === 'before' ? 'juste avant' : 'juste après'}` : null;
-  return [c || `g.${a.g}`, [c ? `g.${a.g}` : null, `base ${k + 1}`, `réf. ${a.ref}`, `allèles ${alleles}${strand}`, gap].filter(Boolean).join(' · ')];
+  const genome = a.genome ? `génome ${a.genome}${a.genome !== a.ref ? ' ≠ réf. JANUS' : ''}` : null;
+  return [c || `g.${a.g}`, [c ? `g.${a.g}` : null, `base ${k + 1}`, genome, `réf. ${a.ref}`, `allèles ${alleles}${strand}`, gap].filter(Boolean).join(' · ')];
 }
 
 /** Annotations par base d'origine : référence et allèles, dans le sens de la lecture. */
@@ -413,12 +420,49 @@ function annotationsOf(result) {
   for (const c of result.cols) {
     if (c.q === null) { skipped += c.ref; continue; }
     const index = result.profile[c.q].index;
-    const a = { ref: show(c.ref), a1: show(c.a1), a2: show(c.a2), g: c.t !== null ? result.winStart + c.t + 1 : null };
+    const a = { ref: show(c.ref), a1: show(c.a1), a2: show(c.a2), g: c.t !== null ? result.winStart + c.t + 1 : null, mixed: c.mixed };
     if (skipped) { a.skipped = flip ? [...skipped].reverse().map(complement).join('') : skipped; a.skippedSide = flip ? 'after' : 'before'; }
     skipped = '';
     map.set(index, a);
   }
+  // Zone de doubles pics (±5 bases) : la ligne Génome y suit l'allèle dominant, sans alerte.
+  const keys = [...map.keys()].sort((x, y) => x - y);
+  keys.forEach((k, i) => {
+    const near = keys.slice(Math.max(0, i - 5), i + 6).map(j => map.get(j));
+    map.get(k).mixedZone = near.filter(a => a.mixed).length >= 0.35 * near.length;
+  });
+  // Ligne Génome : alignement direct des bases du séquenceur (contrôle indépendant de JANUS).
+  const ck = result.check;
+  if (ck) {
+    for (let k = 0; k < ck.genome.length; k++) {
+      if (ck.genome[k] === null && !ck.gapBefore[k]) continue;
+      const a = map.get(k) || {};
+      if (ck.genome[k] !== null) a.genome = show(ck.genome[k]);
+      if (ck.gapBefore[k]) { a.genomeGap = flip ? revcomp(ck.gapBefore[k]) : ck.gapBefore[k]; a.genomeGapSide = flip ? 'after' : 'before'; }
+      map.set(k, a);
+    }
+  }
   return map;
+}
+
+/** Bilan du contrôle direct d'une lecture : discordances et alertes non expliquées par les variants retenus. */
+function checkSummary(r) {
+  const ck = r.check;
+  if (!ck) return null;
+  const pos = g => (state.ref.mapper ? `c.${state.ref.mapper.c(g)}` : `g.${g}`);
+  const unexplained = ck.discrepancies.filter(d => !explainDiscrepancy(d, r, state.merged));
+  const shifts = ck.mapping.ranges.filter(x => !explainShift(x, r, state.merged));
+  const lines = [`identité ${(100 * ck.identity).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} % sur ${ck.compared} bases`];
+  const alerts = [];
+  if (!ck.strandAgrees) alerts.push('orientation différente de celle retenue par JANUS');
+  for (const s of ck.skippedInMixed) alerts.push(`JANUS a sauté ${s.bases} base(s) du génome en ${pos(s.gStart)} juste avant une zone de doubles pics : vérifier que l’indel n’est pas nommé à l’envers`);
+  for (const s of shifts) alerts.push(`positionnement différent de JANUS sur ${s.n} bases autour de ${pos(s.gStart)} (zone propre)`);
+  if (unexplained.length) {
+    const list = unexplained.slice(0, 5).map(d => `${pos(d.g)} ${d.type === 'délétion' ? `${d.ref} absent` : d.type === 'insertion' ? `+${d.read}` : `${d.ref}>${d.read}`}`);
+    alerts.push(`${unexplained.length} discordance(s) lecture / génome non expliquée(s) par les variants retenus : ${list.join(', ')}${unexplained.length > 5 ? '…' : ''}`);
+  }
+  if (!alerts.length) lines.push(ck.discrepancies.length ? `${ck.discrepancies.length} discordance(s), toutes expliquées par les variants retenus` : 'aucune discordance');
+  return { ok: !alerts.length, lines: [...lines, ...alerts] };
 }
 
 function renderTraceSelect() {
@@ -619,14 +663,15 @@ function renderReportPreview() {
   const usable = state.results.filter(r => r.quality.verdict !== 'illisible');
 
   const reads = el('table', {},
-    el('thead', {}, el('tr', {}, ['Lecture', 'Brin', 'Lisibilité', 'Région analysée'].map(t => el('th', {}, t)))),
+    el('thead', {}, el('tr', {}, ['Lecture', 'Brin', 'Lisibilité', 'Contrôle direct', 'Région analysée'].map(t => el('th', {}, t)))),
     el('tbody', {},
       state.results.map(r => el('tr', {},
         el('td', { class: 'mono' }, r.name),
         el('td', {}, r.strand === '+' ? 'Forward' : 'Reverse'),
         el('td', {}, QUALITY_TAG[r.quality.verdict][0]),
+        el('td', {}, (() => { const ck = checkSummary(r); return ck ? `${ck.ok ? 'concordant' : 'à vérifier'} — ${ck.lines.join(' · ')}` : '—'; })()),
         el('td', { class: 'mono' }, regionLabel(r)))),
-      state.failed.map(f => el('tr', {}, el('td', { class: 'mono' }, f.name), el('td', {}, '—'), el('td', {}, 'illisible'), el('td', {}, f.reason)))));
+      state.failed.map(f => el('tr', {}, el('td', { class: 'mono' }, f.name), el('td', {}, '—'), el('td', {}, 'illisible'), el('td', {}, '—'), el('td', {}, f.reason)))));
 
   const variants = selected.length
     ? selected.map(({ variant: v, classId }) => {
