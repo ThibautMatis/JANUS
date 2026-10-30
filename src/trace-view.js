@@ -74,7 +74,8 @@ export class TraceView {
     const colors = { ...COLORS, G: css.getPropertyValue('--trace-g').trim() || COLORS.G };
     const muted = css.getPropertyValue('--muted').trim() || '#647587';
     const accent = css.getPropertyValue('--accent').trim() || '#147b95';
-    const rows = this.annotations.size ? 3 : 0;
+    const warn = css.getPropertyValue('--bad').trim() || '#b3261e';
+    const rows = this.annotations.size ? 4 : 0;
     const labelH = 18, rowH = 15, bottom = 26 + labelH + rows * rowH;
     const plotH = H - bottom - 8;
 
@@ -122,21 +123,36 @@ export class TraceView {
         const a = this.annotations.get(k);
         if (a) {
           ctx.font = '12px ui-monospace, SFMono-Regular, Menlo, monospace';
-          [a.ref, a.a1, a.a2].forEach((b, r) => {
-            const differs = r > 0 && b !== a.ref;
-            ctx.fillStyle = differs ? accent : (colors[b] || muted);
-            if (differs) ctx.font = '700 12px ui-monospace, SFMono-Regular, Menlo, monospace';
+          // Lignes : génome (alignement direct, contrôle), réf. projetée par JANUS, allèles 1 et 2.
+          [a.genome, a.ref, a.a1, a.a2].forEach((b, r) => {
+            if (!b) return;
+            // Génome ≠ réf. JANUS sur un pic simple : à vérifier. En zone de doubles pics, l'alignement direct
+            // suit l'allèle dominant et diffère normalement de JANUS : pas d'alerte.
+            const mismatch = r === 0 && a.ref && b !== a.ref && !a.mixedZone;
+            const differs = r > 1 && b !== a.ref;
+            ctx.fillStyle = mismatch ? warn : differs ? accent : (colors[b] || muted);
+            if (differs || mismatch) ctx.font = '700 12px ui-monospace, SFMono-Regular, Menlo, monospace';
             ctx.fillText(b, x, yBase + labelH + r * rowH);
             ctx.font = '12px ui-monospace, SFMono-Regular, Menlo, monospace';
           });
-          // Base(s) de référence sautée(s) par l'alignement : repère ▾ entre deux bases, ligne Réf.
+          // Bases du génome sans base lue en face (alignement direct) : écrites en petit entre deux pics,
+          // pour que la ligne Génome reste continue.
+          if (a.genomeGap) {
+            const nb = a.genomeGapSide === 'before' ? k - 1 : k + 1;
+            const xn = nb >= 0 && nb < read.bases.length ? X(read.positions[nb]) : x + (a.genomeGapSide === 'before' ? -10 : 10);
+            ctx.fillStyle = warn;
+            ctx.font = '700 9px ui-monospace, SFMono-Regular, Menlo, monospace';
+            ctx.fillText(a.genomeGap.length > 3 ? `+${a.genomeGap.length}` : a.genomeGap, (x + xn) / 2, yBase + labelH - 2);
+            ctx.font = '12px ui-monospace, SFMono-Regular, Menlo, monospace';
+          }
+          // Base(s) de référence sautée(s) par l'alignement de JANUS : repère ▾ entre deux bases, ligne Réf.
           if (a.skipped) {
             const nb = a.skippedSide === 'before' ? k - 1 : k + 1;
             const xn = nb >= 0 && nb < read.bases.length ? X(read.positions[nb]) : x + (a.skippedSide === 'before' ? -10 : 10);
             const xm = (x + xn) / 2;
             ctx.fillStyle = accent;
             ctx.font = '700 11px system-ui, sans-serif';
-            ctx.fillText(a.skipped.length > 1 ? `▾${a.skipped.length}` : '▾', xm, yBase + labelH - 9);
+            ctx.fillText(a.skipped.length > 1 ? `▾${a.skipped.length}` : '▾', xm, yBase + labelH + rowH - 9);
             ctx.font = '12px ui-monospace, SFMono-Regular, Menlo, monospace';
           }
         }
@@ -151,7 +167,7 @@ export class TraceView {
     ctx.font = '11px system-ui, sans-serif';
     ctx.fillStyle = muted;
     ctx.fillText('Lecture', 4, yBase);
-    if (rows) ['Réf.', 'Allèle 1', 'Allèle 2'].forEach((t, r) => ctx.fillText(t, 4, yBase + labelH + r * rowH));
+    if (rows) ['Génome', 'Réf. JANUS', 'Allèle 1', 'Allèle 2'].forEach((t, r) => ctx.fillText(t, 4, yBase + labelH + r * rowH));
 
     if (this.hover !== null && this.hover >= this.start && this.hover < end) this.drawHover(ctx, X(read.positions[this.hover]), W, H, css, accent);
   }
