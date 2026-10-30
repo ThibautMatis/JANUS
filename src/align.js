@@ -10,7 +10,7 @@ const NEG = -1e9;
  * Retourne { score, qStart, qEnd, tStart, tEnd, ops } avec ops = [{ op: 'M'|'I'|'D', q, t }]
  * ('I' = base de la requête absente de la cible, 'D' = base de la cible absente de la requête).
  */
-export function alignLocal(n, m, score, { gapOpen = -8, gapExtend = -2 } = {}) {
+export function alignLocal(n, m, score, { gapOpen = -8, gapExtend = -2, noGapAt = null } = {}) {
   if (n * m > 4e7) throw new Error('Alignement trop grand');
   const w = m + 1;
   const tb = new Uint8Array((n + 1) * w);
@@ -31,6 +31,8 @@ export function alignLocal(n, m, score, { gapOpen = -8, gapExtend = -2 } = {}) {
       if (dx > prev) { prev = dx; from = 2; }
       if (dy > prev) { prev = dy; from = 3; }
       const mv = prev + score(i - 1, j - 1);
+      // noGapAt(t) : gap interdit à la position cible t (insertion avant t ou délétion de t).
+      const banned = noGapAt && noGapAt(j - 1);
       // X : base de requête i en face d'un gap (vient de la ligne précédente).
       let xv = Mp[j] + go, xf = 0;
       if (Xp[j] + ge > xv) { xv = Xp[j] + ge; xf = 1; }
@@ -39,6 +41,7 @@ export function alignLocal(n, m, score, { gapOpen = -8, gapExtend = -2 } = {}) {
       let yv = Mc[j - 1] + go, yf = 0;
       if (Yc[j - 1] + ge > yv) { yv = Yc[j - 1] + ge; yf = 1; }
       if (Xc[j - 1] + go > yv) { yv = Xc[j - 1] + go; yf = 2; }
+      if (banned) { xv = NEG; yv = NEG; }
       Mc[j] = mv; Xc[j] = xv; Yc[j] = yv;
       tb[row + j] = from | (xf << 2) | (yf << 4);
       if (mv > best) { best = mv; bi = i; bj = j; }

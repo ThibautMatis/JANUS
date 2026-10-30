@@ -88,7 +88,8 @@ function skippedInMixedZone(result) {
     while (j < cols.length && cols[j].q === null) j++;
     const after = cols.slice(j, j + 20).filter(c => c.q !== null);
     const before = cols.slice(Math.max(0, i - 20), i).filter(c => c.q !== null);
-    const mixed = cs => (cs.length ? cs.filter(c => c.mixed).length / cs.length : 0);
+    // Seuil bas (second pic ≥ 12 %) : un allèle de référence minoritaire reste ainsi détectable.
+    const mixed = cs => (cs.length ? cs.filter(c => (c.ratio ?? (c.mixed ? 1 : 0)) >= 0.12).length / cs.length : 0);
     if (after.length >= 10 && mixed(after) >= 0.4 && mixed(before) < 0.25) {
       const ts = cols.slice(i, j).map(c => result.winStart + c.t + 1);
       out.push({ gStart: Math.min(...ts), gEnd: Math.max(...ts), bases: j - i });

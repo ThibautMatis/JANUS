@@ -172,3 +172,19 @@ test('délétion d’un G dans un GGG, allèle muté majoritaire : pas de duplic
   assert.deepEqual(merged.map(m => m.names.g), [`NG_G.1:g.${g + 1}del`]);
   assert.equal(merged[0].status, 'confirmé F/R');
 });
+
+test('deux délétions en cis (1 nt + 4 nt à 80 nt d’intervalle) : les deux appelées', () => {
+  const motif = 'ACTTATCTTAGTGGGTAAGTGTTCATTTTTACCTT';
+  const seq = (() => { const s = randomSeq(6000, rng(31)); return s.slice(0, 2280) + motif + s.slice(2280 + motif.length); })();
+  const ref = buildReference({ accession: 'NG_G.1', seq });
+  const g1 = 2280 + motif.indexOf('GGG') + 2, g2 = g1 + 80;
+  const wt = seq.slice(1849, 2650), cut = (s, g, n) => s.slice(0, g - 1849) + s.slice(g - 1849 + n);
+  const mut = cut(cut(wt, g2, 4), g1, 1);
+  const opts = { length: 700, heightVar: 0.45, noise: 15 };
+  const F = simulate([wt.slice(20), mut.slice(20)], [0.35, 0.65], { ...opts, seed: 2 });
+  const R = simulate([revcomp(wt).slice(20), revcomp(mut).slice(20)], [0.35, 0.65], { ...opts, seed: 52 });
+  F.name = 'F'; R.name = 'R';
+  const merged = mergeCalls([F, R].map(r => analyzeRead(r, ref)), ref);
+  assert.deepEqual(merged.map(m => [m.names.g, m.status]), [
+    [`NG_G.1:g.${g1 + 1}del`, 'confirmé F/R'], [`NG_G.1:g.${g2 + 1}_${g2 + 4}del`, 'confirmé F/R']]);
+});

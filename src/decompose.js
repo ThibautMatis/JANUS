@@ -28,6 +28,7 @@ export const DEFAULTS = {
   // est nommé à l'envers : duplication au lieu de délétion). Un indel homozygote, qui décale toute
   // la suite de la lecture, paie largement ce coût.
   profileGapOpen: -40,
+  repairMirror: true, // réaligner quand l'alignement bascule sur l'allèle muté (désactivable pour les tests)
   maxDeletion: 120,   // taille maximale des délétions recherchées au point de rupture (nt)
   maxInsertion: 40,   // taille maximale des insertions recherchées (nt)
   scanMinGain: 20,    // gain d'ajustement minimal pour retenir un indel trouvé par recherche du décalage
@@ -70,8 +71,8 @@ export function analyzeRead(read, ref, options = {}) {
   const winEnd = Math.min(ref.seq.length, hit.diagonal + prof.length + opt.pad);
   const win = ref.seq.slice(winStart, winEnd);
 
-  // Alignement du profil sur la référence.
-  const profAln = alignLocal(prof.length, win.length, (i, j) => {
+  // Alignement du profil sur la référence, puis séparation des allèles.
+  const profileScore = (i, j) => {
     const r = win[j], x = prof[i];
     if (r === 'N' || x.primary === 'N') return 0;
     // Toute base de référence visible compte autant que le pic primaire : chez un hétérozygote, les deux
@@ -79,21 +80,37 @@ export function analyzeRead(read, ref, options = {}) {
     // sauter vers l'allèle muté là où ses pics dominent.
     if (x.primary === r || h(x, r) >= opt.minSignal * Math.max(...x.h)) return 3;
     return -4;
-  }, { gapOpen: opt.profileGapOpen, gapExtend: -2 });
-
-  // Séparation des allèles.
-  const cols = [];
-  for (const o of profAln.ops) {
-    if (o.op === 'D') { cols.push({ q: null, t: o.t, ref: win[o.t], a1: '-', a2: '-' }); continue; }
-    const x = prof[o.q], r = o.op === 'M' ? win[o.t] : '-';
-    const mixed = x.ratio >= opt.ratio;
-    let a1 = x.primary, a2 = x.primary;
-    if (r !== '-' && x.primary !== r && h(x, r) >= opt.minSignal * Math.max(...x.h)) {
-      a1 = r; // référence présente, même faiblement : l'allèle 2 porte le pic dominant
-    } else if (mixed) {
-      if (x.secondary === r) { a1 = x.secondary; a2 = x.primary; } else { a1 = x.primary; a2 = x.secondary; }
+  };
+  const separate = aln => {
+    const out = [];
+    for (const o of aln.ops) {
+      if (o.op === 'D') { out.push({ q: null, t: o.t, ref: win[o.t], a1: '-', a2: '-' }); continue; }
+      const x = prof[o.q], r = o.op === 'M' ? win[o.t] : '-';
+      const mixed = x.ratio >= opt.ratio;
+      let a1 = x.primary, a2 = x.primary;
+      if (r !== '-' && x.primary !== r && h(x, r) >= opt.minSignal * Math.max(...x.h)) {
+        a1 = r; // référence présente, même faiblement : l'allèle 2 porte le pic dominant
+      } else if (mixed) {
+        if (x.secondary === r) { a1 = x.secondary; a2 = x.primary; } else { a1 = x.primary; a2 = x.secondary; }
+      }
+      out.push({ q: o.q, t: o.op === 'M' ? o.t : null, gapT: o.op === 'I' ? o.t : null, ref: r, a1, a2, mixed, ratio: x.ratio });
     }
-    cols.push({ q: o.q, t: o.op === 'M' ? o.t : null, ref: r, a1, a2, mixed });
+    return out;
+  };
+  // Un gap juste avant une zone de doubles pics (sens de lecture) signifie que l'alignement a quitté
+  // l'allèle de référence pour suivre l'allèle muté : l'indel serait nommé à l'envers. On réaligne alors
+  // en interdisant le gap à cet endroit, jusqu'à ce que l'alignement reste sur l'allèle de référence.
+  const banned = new Set();
+  let profAln, cols;
+  for (let pass = 0; pass < 4; pass++) {
+    profAln = alignLocal(prof.length, win.length, profileScore,
+      { gapOpen: opt.profileGapOpen, gapExtend: -2, noGapAt: banned.size ? t => banned.has(t) : null });
+    cols = separate(profAln);
+    const suspects = mirrorGaps(cols, reverse);
+    const fresh = suspects.filter(t => !banned.has(t));
+    if (!fresh.length || !opt.repairMirror) break;
+    // Interdit sur toute la zone décalée qui suit (sens de lecture) : sinon le gap se reforme plus loin.
+    for (const t of fresh) for (let d = -12; d <= 150; d++) banned.add(reverse ? t - d : t + d);
   }
   const seqCols = cols.filter(c => c.q !== null);
   const allele1 = seqCols.map(c => c.a1).join('');
@@ -166,6 +183,31 @@ function breakpointColumn(v, model, seqCols, winStart, reverse, seq) {
   const cols = seqCols.filter(c => c.t !== null);
   if (reverse) cols.reverse();
   return cols.find(c => { const alt = at(winStart + c.t); return alt !== null && alt !== seq[winStart + c.t]; }) || null;
+}
+
+/**
+ * Gaps de l'alignement du profil suivis (dans le sens de lecture) d'une zone de doubles pics, après une
+ * zone propre : positions (fenêtre de référence) où l'alignement a basculé sur l'allèle muté.
+ */
+function mirrorGaps(cols, reverse) {
+  const seq = reverse ? cols.slice().reverse() : cols;
+  const isGap = c => c.q === null || c.t === null;
+  // Seuil bas (second pic ≥ 12 % du premier) : quand l'allèle muté domine (80/20), l'allèle de référence
+  // donne rarement un « double pic » au seuil habituel, mais reste visible.
+  const mixed = cs => (cs.length ? cs.filter(c => c.ratio >= 0.12).length / cs.length : 0);
+  const out = [];
+  for (let i = 0; i < seq.length; i++) {
+    if (!isGap(seq[i])) continue;
+    let j = i;
+    while (j < seq.length && isGap(seq[j])) j++;
+    const before = seq.slice(Math.max(0, i - 20), i).filter(c => c.q !== null);
+    const after = seq.slice(j, j + 20).filter(c => c.q !== null);
+    if (after.length >= 10 && mixed(after) >= 0.4 && mixed(before) < 0.25) {
+      for (const c of seq.slice(i, j)) out.push(c.t ?? c.gapT);
+    }
+    i = j;
+  }
+  return out;
 }
 
 const median = a => { const b = a.slice().sort((x, y) => x - y); return b.length ? b[Math.floor(b.length / 2)] : 0; };
@@ -663,6 +705,25 @@ export function mergeCalls(results, ref = null) {
         }
       }
       merged.delete(v.key);
+    }
+  }
+
+  // Un indel et sa forme miroir (délétion de X / duplication de X au même endroit) expliquent le même
+  // signal : on garde celui appelé par une lecture dont l'alignement n'a pas de gap à cet endroit
+  // (un gap y signale un alignement qui a suivi l'allèle muté).
+  if (seq) {
+    const gapNear = (r, v) => r.cols.some(c => (c.q === null || c.t === null) && Math.abs(r.winStart + (c.t ?? c.gapT) - v.pos) <= 15);
+    for (const a of [...merged.values()]) {
+      const mirror = mirrorOf(a, seq);
+      const b = mirror && merged.get(variantKey(mirror));
+      if (!b || !merged.has(a.key)) continue;
+      const doubtful = v => v.reads.filter(x => gapNear(x.result, v)).length - v.reads.filter(x => !gapNear(x.result, v)).length;
+      const [keep, drop] = doubtful(a) <= doubtful(b) ? [a, b] : [b, a];
+      for (const x of drop.reads) if (!keep.reads.some(w => w.result === x.result)) {
+        keep.reads.push({ ...x, flags: [...x.flags, `forme miroir ${drop.names.g.split(':')[1]} écartée`] });
+        keep.strands.add(x.strand);
+      }
+      merged.delete(drop.key);
     }
   }
 

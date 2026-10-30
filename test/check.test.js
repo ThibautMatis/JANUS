@@ -48,7 +48,7 @@ test('indel hétérozygote : décalage et discordances expliqués par le variant
 test('alignement JANUS sur l’allèle muté (ancien réglage) : base du génome sautée en zone mixte signalée', () => {
   const g = 2280 + motif.indexOf('GGG') + 2, mut = wt.slice(0, g - 1849) + wt.slice(g - 1848);
   const reads = pair(mut, 0.7);
-  const bad = reads.map(r => analyzeRead(r, REF, { profileGapOpen: -10 }));
+  const bad = reads.map(r => analyzeRead(r, REF, { profileGapOpen: -10, repairMirror: false }));
   assert.ok(alerts(bad, mergeCalls(bad, REF)).some(a => a.skipped > 0));
   const good = reads.map(r => analyzeRead(r, REF));
   assert.ok(alerts(good, mergeCalls(good, REF)).every(a => a.skipped === 0));
@@ -60,4 +60,15 @@ test('SNV non retenu par JANUS : discordance non expliquée', () => {
   const results = pair(mut, 1).map(r => analyzeRead(r, REF));
   // Variants retenus volontairement vides : le contrôle doit voir la discordance seul.
   assert.ok(alerts(results, []).every(a => a.unexplained >= 1));
+});
+
+test('réparation : même avec un gap peu coûteux, l’alignement reste sur l’allèle de référence', () => {
+  const g = 2280 + motif.indexOf('GGG') + 2, mut = wt.slice(0, g - 1849) + wt.slice(g - 1848);
+  for (const fraction of [0.7, 0.8]) {
+    const results = pair(mut, fraction).map(r => analyzeRead(r, REF, { profileGapOpen: -10 }));
+    const merged = mergeCalls(results, REF);
+    assert.ok(alerts(results, merged).every(a => a.skipped === 0), `fraction ${fraction}`);
+    assert.ok(merged.some(m => m.names.g === `NG_G.1:g.${g + 1}del`), `fraction ${fraction} : ${merged.map(m => m.names.g)}`);
+    assert.ok(!merged.some(m => m.type === 'dup'), `fraction ${fraction} : duplication miroir`);
+  }
 });
