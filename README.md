@@ -2,7 +2,7 @@
 
 # JANUS — *Joint Allele aNalysis Using Sanger*
 
-**v0.8.2 · 30 octobre 2026**
+**v0.8.3 · 30 octobre 2026**
 
 Outil web d’appel de variants sur chromatogrammes Sanger (`.ab1`) : il sépare les deux allèles d’un échantillon hétérozygote, nomme les SNV et les indels (y compris les grands indels) en HGVS `c.`, `p.` et `g.`, et produit un rapport imprimable.
 
