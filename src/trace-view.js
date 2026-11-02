@@ -13,12 +13,15 @@ const MONO = 'ui-monospace, SFMono-Regular, Menlo, monospace';
 export class TraceView {
   /**
    * onSelect(k) : clic sur une base de la lecture ;
-   * label(colonne) → [titre, détail] au survol (colonne = { k } pour une base lue, { gap } sinon).
+   * label(colonne) → [titre, détail] au survol (colonne = { k } pour une base lue, { gap } sinon) ;
+   * context(g) → { region: { kind, n }, side, codon: { n, phase, aa } } pour la position génomique g
+   * (bandeau exon / intron, acides aminés de référence, limites des codons), ou null.
    */
-  constructor(canvas, { onSelect, label } = {}) {
+  constructor(canvas, { onSelect, label, context } = {}) {
     this.canvas = canvas;
     this.onSelect = onSelect;
     this.label = label;
+    this.context = context;
     this.hover = null;
     this.read = null;
     this.start = 0;
@@ -112,7 +115,9 @@ export class TraceView {
     const accent = css.getPropertyValue('--accent').trim() || '#147b95';
     const rows = this.annotations.size ? 3 : 0;
     const labelH = 18, rowH = 15, bottom = 26 + labelH + rows * rowH;
-    const plotH = H - bottom - 8;
+    // Bandeau exon / intron et ligne des acides aminés en haut, si le transcrit est connu.
+    const top = this.context ? 36 : 0;
+    const plotH = H - bottom - 8 - top;
 
     const end = Math.min(read.bases.length, this.start + this.count);
     const x0 = Math.max(0, read.positions[this.start] - 8);
@@ -147,7 +152,7 @@ export class TraceView {
       const t = read.traces[b];
       let prevV = null;
       for (let i = x0; i <= x1; i++) {
-        const vi = v(i), x = X(vi), y = 8 + plotH - (t[i] / ymax) * plotH;
+        const vi = v(i), x = X(vi), y = top + 8 + plotH - (t[i] / ymax) * plotH;
         // Colonne de génome insérée : le tracé s'interrompt au lieu d'être étiré en diagonale.
         if (prevV === null || vi - prevV > 1.5) ctx.moveTo(x, y); else ctx.lineTo(x, y);
         prevV = vi;
@@ -158,6 +163,7 @@ export class TraceView {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     const perCol = (W - 70) / Math.max(1, layout.length);
+    if (this.context) this.drawContext(ctx, layout, { W, H, top, perCol, muted, accent, rowsBottom: H - 20 });
     const step = perCol < 3 ? 50 : perCol < 6 ? 20 : perCol < 12 ? 10 : 5;
     const showLetters = perCol >= 9;
     const yBase = H - bottom + labelH / 2 + 4;
@@ -204,6 +210,68 @@ export class TraceView {
     if (this.hover !== null && layout[this.hover]) this.drawHover(ctx, layout[this.hover], W, H, css, accent);
   }
 
+  /** Position génomique d'une colonne (base lue alignée ou base du génome insérée), ou null. */
+  columnG(col) {
+    if (col.k === null) return col.gap.g;
+    const a = this.annotations.get(col.k);
+    return a && a.genome !== '-' ? a.g : null;
+  }
+
+  /**
+   * Bandeau exon / intron (avec l'exon le plus proche dans un intron), acides aminés de référence au
+   * centre de chaque codon et limites des codons en pointillés discrets.
+   */
+  drawContext(ctx, layout, { W, top, perCol, muted, accent, rowsBottom }) {
+    const ctxs = layout.map(c => { const g = this.columnG(c); return g === null ? null : this.context(g); });
+    const half = perCol / 2;
+    // Bandeau : segments consécutifs de même région.
+    let i = 0;
+    while (i < layout.length) {
+      const r = ctxs[i]?.region;
+      let j = i;
+      while (j + 1 < layout.length && ctxs[j + 1]?.region?.kind === r?.kind && ctxs[j + 1]?.region?.n === r?.n) j++;
+      if (r) {
+        const x0 = Math.max(60, layout[i].x - half), x1 = Math.min(W - 10, layout[j].x + half);
+        const exon = r.kind === 'exon';
+        ctx.fillStyle = exon ? accent + '33' : muted + '18';
+        ctx.fillRect(x0, 2, x1 - x0, 14);
+        if (exon) { ctx.fillStyle = accent; ctx.fillRect(x0, 14, x1 - x0, 2); }
+        let text = r.kind === 'exon' ? `Exon ${r.n}` : r.kind === 'intron' ? `Intron ${r.n}` : r.kind === 'amont' ? 'En amont du gène' : 'En aval du gène';
+        // Dans un intron : exon le plus proche, avec une flèche dans sa direction à l'écran.
+        const near = ctxs[Math.round((i + j) / 2)]?.nearest;
+        if (r.kind === 'intron' && near) text = near.left ? `← Exon ${near.n} · ${text}` : `${text} · Exon ${near.n} →`;
+        ctx.font = `${exon ? '700 ' : ''}11px system-ui, sans-serif`;
+        ctx.fillStyle = exon ? accent : muted;
+        if (ctx.measureText(text).width < x1 - x0 - 4) ctx.fillText(text, (x0 + x1) / 2, 9);
+      }
+      i = j + 1;
+    }
+    // Acides aminés de référence (au milieu du codon) et limites des codons.
+    ctx.save();
+    ctx.strokeStyle = muted + '55';
+    ctx.setLineDash([2, 3]);
+    ctx.lineWidth = 1;
+    for (let k = 0; k < layout.length; k++) {
+      const cd = ctxs[k]?.codon;
+      if (!cd) continue;
+      if (cd.phase === 1) {
+        const name = perCol >= 14 ? `${cd.aa3}${cd.n}` : perCol >= 9 ? cd.aa3 : cd.aa;
+        ctx.font = `10px ${MONO}`;
+        ctx.fillStyle = cd.aa === '*' ? '#b3261e' : muted;
+        ctx.fillText(name, layout[k].x, 27);
+      }
+      const next = ctxs[k + 1]?.codon;
+      if (next && next.n !== cd.n) {
+        const xm = (layout[k].x + layout[k + 1].x) / 2;
+        ctx.beginPath();
+        ctx.moveTo(xm, 20);
+        ctx.lineTo(xm, rowsBottom);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
   /** Barre verticale sur la colonne survolée et étiquette (position c., détail). */
   drawHover(ctx, col, W, H, css, accent) {
     const x = col.x;
@@ -222,7 +290,7 @@ export class TraceView {
     ctx.font = '11px system-ui, sans-serif';
     const w2 = detail ? ctx.measureText(detail).width : 0;
     const bw = Math.max(w1, w2) + 16, bh = detail ? 38 : 22;
-    const bx = Math.min(Math.max(2, x + 8), W - bw - 2), by = 4;
+    const bx = Math.min(Math.max(2, x + 8), W - bw - 2), by = this.context ? 40 : 4; // sous le bandeau
     ctx.fillStyle = css.getPropertyValue('--card').trim() || '#fff';
     ctx.strokeStyle = accent;
     ctx.beginPath();
@@ -301,13 +369,13 @@ export class TraceView {
  * Image PNG (data URL) d'un chromatogramme centré sur la base `center`, en couleurs claires,
  * pour le rapport imprimable.
  */
-export function snapshot(read, annotations, markers, center, { width = 1000, height = 300, count = 41, gaps = new Map() } = {}) {
+export function snapshot(read, annotations, markers, center, { width = 1000, height = 330, count = 41, gaps = new Map(), context = null } = {}) {
   const canvas = document.createElement('canvas');
   const view = Object.create(TraceView.prototype);
   const n = read.bases.length;
   count = Math.min(n, count);
   Object.assign(view, {
-    canvas, read, annotations, markers, gaps, width, height, dpr: 2, hover: null, label: null,
+    canvas, read, annotations, markers, gaps, context, width, height, dpr: 2, hover: null, label: null,
     count, start: Math.max(0, Math.min(n - count, Math.round(center - count / 2))),
   });
   view.draw();

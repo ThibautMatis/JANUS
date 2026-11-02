@@ -72,7 +72,7 @@ td.empty { color: var(--muted); text-align: center; padding: 18px; }
 .tag.warn { color: var(--warn); }
 .tag.bad { color: var(--bad); }
 .detail { background: var(--status); border-radius: 8px; padding: 12px; font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; overflow-x: auto; }
-canvas#trace { display: block; width: 100%; height: 360px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); touch-action: none; cursor: grab; user-select: none; }
+canvas#trace { display: block; width: 100%; height: 400px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); touch-action: none; cursor: grab; user-select: none; }
 canvas#trace:active { cursor: grabbing; }
 footer { text-align: center; color: var(--muted); padding: 18px 16px 28px; font-size: 12px; }
 @media (max-width: 600px) {

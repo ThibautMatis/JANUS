@@ -9,7 +9,7 @@ import { CLASSES, classOf, conclusion, geneOf } from './report.js';
 import { NAME, releaseLabel } from './version.js';
 
 document.getElementById('release').textContent = releaseLabel();
-import { proteinName } from './protein.js';
+import { proteinName, translate, THREE } from './protein.js';
 import { variantLocation } from './hgvs.js';
 import { directCheck, explainDiscrepancy, explainShift } from './check.js';
 import { genomicMapping, gnomadId, gnomadFrequencies, gnomadUrl } from './gnomad.js';
@@ -410,7 +410,39 @@ function hoverLabel(col) {
   const alleles = a.a1 === a.a2 ? `${a.a1}` : `${a.a1}/${a.a2}`;
   // Bases dans le sens de la lecture, comme sous les pics : complémentaires du transcrit sur une Reverse.
   const strand = r.strand === '-' ? ' (brin −)' : '';
-  return [cOf(a.g) || `g.${a.g}`, [cOf(a.g) ? `g.${a.g}` : null, `base ${k + 1}`, `génome ${a.genome}`, `allèles ${alleles}${strand}`].filter(Boolean).join(' · ')];
+  const cd = view.context?.(a.g)?.codon;
+  const codon = cd ? `codon ${cd.n} (${cd.aa3}, base ${cd.phase + 1}/3)` : null;
+  return [cOf(a.g) || `g.${a.g}`, [cOf(a.g) ? `g.${a.g}` : null, `base ${k + 1}`, `génome ${a.genome}`, `allèles ${alleles}${strand}`, codon].filter(Boolean).join(' · ')];
+}
+
+/**
+ * Contexte d'une position génomique pour le bandeau du chromatogramme : exon / intron (et, dans un
+ * intron, l'exon le plus proche et son côté à l'écran), codon et acide aminé de référence.
+ */
+function contextFor(result) {
+  const ref = state.ref, m = ref.mapper;
+  if (!m) return null;
+  if (!ref._protein && ref.cds) {
+    const spliced = m.exons.map(([s, e]) => ref.seq.slice(s - 1, e)).join('');
+    ref._protein = translate(spliced.slice(ref.cds.cdsStart - 1));
+  }
+  const reverse = result.strand === '-';
+  return g => {
+    const region = m.region(g);
+    let nearest = null;
+    if (region.kind === 'intron') {
+      // c.N+d : exon en amont (positions génomiques plus petites) ; c.N-d : exon en aval.
+      const upstream = /\+\d+$/.test(m.c(g));
+      nearest = { n: upstream ? region.n : region.n + 1, left: upstream !== reverse };
+    }
+    let codon = null;
+    const t = m.exonic(g);
+    if (t !== null && ref.cds && ref._protein && t >= ref.cds.cdsStart && t <= ref.cds.cdsEnd) {
+      const i = t - ref.cds.cdsStart, n = Math.floor(i / 3), aa = ref._protein[n] || 'X';
+      codon = { n: n + 1, phase: i % 3, aa, aa3: aa === '*' ? 'Ter' : THREE[aa] || 'Xaa' };
+    }
+    return { region, nearest, codon };
+  };
 }
 
 /**
@@ -472,6 +504,7 @@ function showTrace(i, center = null) {
     view.result = r;
     const ann = annotationsOf(r);
     view.annotationMap = ann.map;
+    view.context = contextFor(r);
     view.setRead(r.read, ann.map, r.variants.map(v => v.readBase - 1), ann.gaps);
   }
   if (center !== null) {
@@ -639,7 +672,7 @@ function variantFigures(v) {
     const key = `${v.key}|${result.name}`;
     if (!report.images.has(key)) {
       const ann = annotationsOf(result);
-      report.images.set(key, snapshot(result.read, ann.map, [center], center, { gaps: ann.gaps }));
+      report.images.set(key, snapshot(result.read, ann.map, [center], center, { gaps: ann.gaps, context: contextFor(result) }));
     }
     const pos = state.ref.mapper ? `c.${state.ref.mapper.c(v.pos + 1)}` : `g.${v.pos + 1}`;
     return el('figure', {},
