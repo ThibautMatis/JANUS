@@ -22,15 +22,16 @@ export function analysedRegion(ref, results) {
 }
 
 /**
- * Conclusion : une phrase par variant retenu, {variant, classId}, dans l'ordre fourni ;
- * en l'absence de variant retenu, absence de variant dans la région analysée.
+ * Conclusion : une phrase par variant retenu, {variant, classId}, dans l'ordre fourni, puis
+ * « Patient porteur. » ; en l'absence de variant retenu, absence de variant dans la région analysée,
+ * puis « Patient non porteur. ».
  */
 export function conclusion(selected, ref, results) {
   const gene = geneOf(ref);
   const transcript = ref.transcript?.id;
   if (!selected.length) {
     const region = analysedRegion(ref, results);
-    return `Absence de variant détecté dans la région analysée du gène ${gene}${transcript ? ` (${transcript}` : ''}${region ? `${transcript ? ', ' : ' ('}${region})` : transcript ? ')' : ''}.`;
+    return `Absence de variant détecté dans la région analysée du gène ${gene}${transcript ? ` (${transcript}` : ''}${region ? `${transcript ? ', ' : ' ('}${region})` : transcript ? ')' : ''}.\nPatient non porteur.`;
   }
   return selected.map(({ variant: v, classId }) => {
     const cls = classOf(classId);
@@ -39,5 +40,5 @@ export function conclusion(selected, ref, results) {
     const state = v.genotype === 'homozygote' ? 'à l’état homozygote' : v.genotype === 'hétérozygote' ? 'à l’état hétérozygote' : '';
     const confirm = v.status === 'confirmé F/R' ? '' : ' Variant non confirmé sur les deux brins : à vérifier.';
     return `Détection${state ? ` ${state}` : ''} du variant ${cls ? cls.label : '[classification à préciser]'} ${name}${p} dans le gène ${gene}${cls ? ` (classe ${cls.id})` : ''}.${confirm}`;
-  }).join('\n');
+  }).join('\n') + '\nPatient porteur.';
 }
