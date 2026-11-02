@@ -29,3 +29,14 @@ test('conclusion : aucun variant retenu', () => {
   // Seule la lecture exploitable compte pour la région analysée (g.150–400 → c.50_300).
   assert.equal(conclusion([], ref, results), 'Absence de variant détecté dans la région analysée du gène MSH2 (NM_000251.2, c.50_300).\nPatient non porteur.');
 });
+
+test('conclusion : variant recherché non retrouvé', () => {
+  const sought = { names: { c: 'NM_000059.4:c.1813dup', g: 'NG_012772.3:g.1dup' }, protein: { short: 'p.(Ile605Asnfs*11)' } };
+  const brca = { ...ref, transcript: { id: 'NM_000059.4', gene: 'BRCA2' } };
+  assert.equal(conclusion([], brca, results, [sought]),
+    'Absence du variant NM_000059.4:c.1813dup p.(Ile605Asnfs*11) recherché dans le gène BRCA2.\nPatient non porteur.');
+  const text = conclusion([{ variant: del, classId: '1' }], brca, results, [sought]).split('\n');
+  assert.equal(text.length, 3);
+  assert.match(text[1], /^Détection .* bénin /);
+  assert.equal(text[2], 'Patient porteur.');
+});

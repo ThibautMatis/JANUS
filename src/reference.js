@@ -54,7 +54,7 @@ export function parseGenBank(text) {
       }
     }
     for (const f of features) {
-      for (const k of Object.keys(f.qualifiers)) f.qualifiers[k] = f.qualifiers[k].map(v => v.replace(/"$/, '').trim());
+      for (const k of Object.keys(f.qualifiers)) f.qualifiers[k] = f.qualifiers[k].map(v => v.trim().replace(/"$/, '').trim());
       Object.assign(f, parseLocation(f.location));
     }
     records.push({ accession, definition, comment, seq, features });

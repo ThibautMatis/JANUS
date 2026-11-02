@@ -2,7 +2,7 @@
 
 # JANUS — *Joint Allele aNalysis Using Sanger*
 
-**v0.8.4 · 2 novembre 2026**
+**v0.8.5 · 2 novembre 2026**
 
 Outil web d’appel de variants sur chromatogrammes Sanger (`.ab1`) : il sépare les deux allèles d’un échantillon hétérozygote, nomme les SNV et les indels (y compris les grands indels) en HGVS `c.`, `p.` et `g.`, et produit un rapport imprimable.
 
@@ -15,7 +15,7 @@ Tout se passe dans le navigateur : les chromatogrammes ne sont jamais envoyés �
 ## Utilisation
 
 1. **Référence** : taper le gène (ex. `BRCA2`) puis cliquer sur « Charger ». Le RefSeqGene (NG_) et le transcrit de référence sont choisis automatiquement, et la référence reste mémorisée dans le navigateur.
-2. **Chromatogrammes** : importer les `.ab1` Forward et Reverse, puis cliquer sur « Analyser ». La lisibilité de chaque lecture est indiquée, ainsi qu’un **contrôle direct** : les bases appelées par le séquenceur sont alignées sur le génome, indépendamment de JANUS, et toute discordance non expliquée par les variants retenus est signalée.
+2. **Chromatogrammes** : importer les `.ab1` Forward et Reverse, taper si besoin le **variant recherché** en c. (ex. `c.1813dup`), puis cliquer sur « Analyser ». Le variant recherché est signalé trouvé ou non retrouvé, lecture par lecture ; s’il est absent, le chromatogramme se place sur sa position, et le rapport conclut « Absence du variant … recherché » avec la capture correspondante. La lisibilité de chaque lecture est indiquée, ainsi qu’un **contrôle direct** : les bases appelées par le séquenceur sont alignées sur le génome, indépendamment de JANUS, et toute discordance non expliquée par les variants retenus est signalée.
 3. **Variants** : nomenclatures `c.`, `p.` et `g.`, génotype, fraction allélique, confirmation F/R. Le tableau se trie par colonne, et le bouton « Fréquences gnomAD » interroge gnomAD v4.
 4. **Chromatogramme** : cliquer sur un variant pour centrer la vue dessus. Au survol, la position `c.` de chaque base s’affiche. Sous les pics, la ligne **Génome** donne la séquence de référence placée par le contrôle direct (en rouge si elle diffère de la référence projetée par JANUS sur un pic simple).
 5. **Rapport** : choisir les variants, les classer (classes 1 à 5), vérifier la conclusion, puis cliquer sur « Imprimer / PDF ».

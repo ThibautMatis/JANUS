@@ -1,7 +1,7 @@
 // Interface de JANUS : chargement de la référence, analyse des .ab1, résultats et chromatogramme.
 
 import { parseABIF } from './abif.js';
-import { analyzeRead, mergeCalls } from './decompose.js';
+import { analyzeRead, mergeCalls, modelSupport } from './decompose.js';
 import { fetchGenBank, loadGene, referenceFromRecord, referenceFromFasta, referenceFromGenBank, preferredTranscript, listTranscripts } from './reference.js';
 import { complement } from './sequence.js';
 import { TraceView, snapshot } from './trace-view.js';
@@ -10,7 +10,7 @@ import { NAME, releaseLabel } from './version.js';
 
 document.getElementById('release').textContent = releaseLabel();
 import { proteinName, translate, THREE } from './protein.js';
-import { variantLocation } from './hgvs.js';
+import { variantLocation, parseVariantC, variantKey, hgvsNames } from './hgvs.js';
 import { directCheck, explainDiscrepancy, explainShift } from './check.js';
 import { genomicMapping, gnomadId, gnomadFrequencies, gnomadUrl } from './gnomad.js';
 
@@ -186,9 +186,112 @@ $('analyze').addEventListener('click', async () => {
   renderReads();
   renderVariants();
   renderTraceSelect();
+  evaluateSought();
   resetReport();
   setStatus('readStatus', readSummary(), !results.length);
+  // Variant recherché absent : chromatogramme positionné sur sa position, sur la première lecture informative.
+  const s = state.sought;
+  if (s && !s.found) {
+    const first = s.reads.find(x => x.center !== null && x.gain !== null) || s.reads.find(x => x.center !== null);
+    if (first) { $('traceRead').value = String(state.results.indexOf(first.result)); showTrace(state.results.indexOf(first.result), first.center); }
+  }
 });
+
+// ---------------------------------------------------------------------------
+// Variant recherché : trouvé ou non, et ce que dit chaque lecture à sa position.
+
+/** Base de la lecture la plus proche d'une position génomique (null si la lecture ne la couvre pas). */
+function centerFor(result, g) {
+  let center = null, best = Infinity;
+  for (const [k, a] of annotationsOf(result).map) if (a.g && Math.abs(a.g - g) < best) { best = Math.abs(a.g - g); center = k; }
+  return best <= 2 ? center : null;
+}
+
+function evaluateSought() {
+  const text = $('sought').value.trim();
+  state.sought = null;
+  if (!text) { $('soughtStatus').hidden = true; renderVariants(); return; }
+  if (!state.ref) return renderSoughtError('chargez d’abord une référence (étape 1)');
+  let parsed;
+  try { parsed = parseVariantC(text, state.ref); } catch (e) { return renderSoughtError(e.message); }
+  const v = parsed.variant;
+  Object.assign(v, { key: variantKey(v), names: hgvsNames(v, state.ref), protein: proteinName(v, state.ref), location: variantLocation(v, state.ref.mapper) });
+  const s = { variant: v, transcript: parsed.transcript, found: null, near: null, reads: [] };
+  if (state.results.length) {
+    s.found = state.merged.find(m => m.key === v.key) || null;
+    // Indel de même bilan à quelques bases : probablement le même événement, nommé autrement.
+    const net = x => x.ins.length - x.del.length;
+    if (!s.found && v.type !== 'snv') s.near = state.merged.find(m => m.type !== 'snv' && net(m) === net(v) && Math.abs(m.pos - v.pos) <= 10) || null;
+    for (const r of state.results.filter(x => x.quality.verdict !== 'illisible')) {
+      const called = s.found?.reads.some(x => x.result === r) ? 'direct' : s.found?.supportedBy.some(x => x.name === r.name) ? 'modèle' : null;
+      s.reads.push({ result: r, called, gain: modelSupport(r, v, state.ref.seq), center: centerFor(r, v.pos + 1) });
+    }
+  }
+  state.sought = s;
+  renderSought();
+  renderVariants();
+}
+
+function renderSoughtError(message) {
+  const box = $('soughtStatus');
+  box.hidden = false;
+  box.className = 'sought-box error';
+  box.replaceChildren(el('b', {}, 'Variant recherché non valide : '), message);
+}
+
+/** Verdict d'une lecture sur le variant recherché. */
+function soughtReadVerdict(s, x) {
+  if (x.called === 'direct') return 'variant appelé';
+  if (x.called === 'modèle') return 'variant confirmé par modélisation (lecture débutant dans la zone décalée)';
+  if (x.gain === null) return x.center === null ? 'position non couverte' : 'non informative à cette position (trop près d’une extrémité)';
+  const strong = s.variant.type === 'snv' ? 2 : 20;
+  return x.gain >= strong ? 'signal compatible avec le variant, mais non appelé : à vérifier sur le chromatogramme' : 'pas de signal du variant à cette position';
+}
+
+function renderSought() {
+  const s = state.sought, box = $('soughtStatus');
+  box.hidden = false;
+  const v = s.variant;
+  const name = `${v.names.c}${v.protein?.short ? ` ${v.protein.short}` : ''}`;
+  const status = !state.results.length ? tag('sera recherché à l’analyse', 'warn')
+    : s.found ? tag(`trouvé — ${s.found.status}`, s.found.status === 'confirmé F/R' ? 'ok' : 'warn')
+    : tag('non retrouvé', 'bad');
+  box.className = 'sought-box' + (!state.results.length ? '' : s.found ? ' found' : ' absent');
+  const lines = [];
+  if (s.transcript && state.ref.transcript && s.transcript !== state.ref.transcript.id) {
+    lines.push(el('li', {}, `⚠ Saisi sur ${s.transcript}, interprété sur ${state.ref.transcript.id} : vérifier que la numérotation c. est la même.`));
+  }
+  if (s.found) {
+    const fr = s.found.reads.map(x => x.alleleFraction).filter(Number.isFinite).map(f => `${Math.round(100 * f)} %`).join(' / ');
+    lines.push(el('li', {}, `${s.found.genotype}${fr ? `, fraction ${fr}` : ''}`));
+  }
+  if (s.near) lines.push(el('li', {}, `≈ indel de même taille appelé à proximité : ${s.near.names.c || s.near.names.g} — vérifier s’il s’agit du même événement décrit autrement.`));
+  for (const x of s.reads) {
+    const go = el('button', { type: 'button', class: 'ghost' }, 'Voir');
+    go.addEventListener('click', () => {
+      const i = state.results.indexOf(x.result);
+      $('traceRead').value = String(i);
+      showTrace(i, x.center);
+      $('step-trace').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+    lines.push(el('li', {}, `${x.result.name} (${x.result.strand === '+' ? 'Forward' : 'Reverse'}) : ${soughtReadVerdict(s, x)}`, x.center !== null ? go : null));
+  }
+  box.replaceChildren(
+    el('h3', {}, 'Variant recherché : ', el('span', { class: 'mono' }, name), v.location ? el('span', { class: 'note' }, `(${v.location})`) : null, status),
+    lines.length ? el('ul', {}, lines) : '');
+}
+
+$('sought').addEventListener('change', () => {
+  evaluateSought();
+  if (!state.results.length) return;
+  // Le variant recherché, s'il est trouvé, est coché pour le rapport ; les autres choix sont conservés.
+  const f = state.sought?.found;
+  if (f && report.choices.has(f.key)) report.choices.get(f.key).checked = true;
+  renderReportTable();
+  updateConclusion();
+  renderReportPreview();
+});
+$('sought').addEventListener('keydown', e => { if (e.key === 'Enter') $('sought').dispatchEvent(new Event('change')); });
 
 /** Orientation devinée d'après le nom de fichier (lectures non localisées). */
 function strandFromName(name) {
@@ -318,7 +421,7 @@ function renderVariants() {
   }
   for (const v of sortedVariants()) {
     const tr = document.createElement('tr');
-    tr.className = 'clickable';
+    tr.className = 'clickable' + (state.sought && state.sought.variant.key === v.key ? ' sought' : '');
     cell(tr, v.names.c ? v.names.c.split(':')[1] : '—', 'mono');
     cell(tr, v.location || '—');
     const p = cell(tr, v.protein?.short || '—', 'mono');
@@ -500,12 +603,19 @@ function renderTraceSelect() {
 function showTrace(i, center = null) {
   const r = state.results[i];
   if (!r) return;
+  // Repères : variants appelés sur cette lecture et position du variant recherché.
+  const markers = r.variants.map(v => v.readBase - 1);
+  const soughtAt = state.sought?.reads.find(x => x.result === r)?.center;
+  if (soughtAt !== undefined && soughtAt !== null) markers.push(soughtAt);
   if (view.result !== r) {
     view.result = r;
     const ann = annotationsOf(r);
     view.annotationMap = ann.map;
     view.context = contextFor(r);
-    view.setRead(r.read, ann.map, r.variants.map(v => v.readBase - 1), ann.gaps);
+    view.setRead(r.read, ann.map, markers, ann.gaps);
+  } else {
+    view.markers = markers;
+    view.draw();
   }
   if (center !== null) {
     view.centerOn(center);
@@ -602,7 +712,7 @@ function el(tag, props = {}, ...children) {
 
 /** Nouvelle analyse : variants confirmés F/R cochés par défaut, à classer. */
 function resetReport() {
-  report.choices = new Map(state.merged.map(v => [v.key, { checked: v.status === 'confirmé F/R', classId: '' }]));
+  report.choices = new Map(state.merged.map(v => [v.key, { checked: v.status === 'confirmé F/R' || state.sought?.found === v, classId: '' }]));
   report.edited = false;
   report.images = new Map();
   renderReportTable();
@@ -647,7 +757,8 @@ function renderReportTable() {
 
 function updateConclusion(force = false) {
   if (report.edited && !force) return;
-  $('repConclusion').value = state.ref && state.results.length ? conclusion(selectedForReport(), state.ref, state.results) : '';
+  const absent = state.sought && !state.sought.found ? [state.sought.variant] : [];
+  $('repConclusion').value = state.ref && state.results.length ? conclusion(selectedForReport(), state.ref, state.results, absent) : '';
   report.edited = false;
 }
 
@@ -679,6 +790,32 @@ function variantFigures(v) {
       el('img', { src: report.images.get(key), alt: `Chromatogramme ${result.name} autour de ${pos}` }),
       el('figcaption', {}, `${result.name} (${result.strand === '+' ? 'Forward' : 'Reverse'}, ${how}) — base ${center + 1} surlignée ; lignes : lecture, génome, allèle 1, allèle 2 (sens de lecture).`));
   });
+}
+
+/**
+ * Rapport : variant recherché. S'il n'est pas retrouvé, capture de chaque lecture informative centrée
+ * sur sa position, avec ce que dit la lecture (absence de signal, ou signal à vérifier).
+ */
+function soughtSection() {
+  const s = state.sought;
+  if (!s || !state.results.length) return [];
+  const v = s.variant;
+  const name = `${v.names.c}${v.protein?.short ? ` ${v.protein.short}` : ''}`;
+  const out = [el('h2', {}, 'Variant recherché'),
+    el('p', {}, el('span', { class: 'mono' }, name), v.location ? ` (${v.location})` : '', ' — ', s.found ? `trouvé (${s.found.status})` : 'non retrouvé')];
+  if (s.found) return out; // ses captures figurent avec les variants retenus
+  for (const x of s.reads) {
+    if (x.center === null) continue;
+    const key = `recherche|${v.key}|${x.result.name}`;
+    if (!report.images.has(key)) {
+      const ann = annotationsOf(x.result);
+      report.images.set(key, snapshot(x.result.read, ann.map, [x.center], x.center, { gaps: ann.gaps, context: contextFor(x.result) }));
+    }
+    out.push(el('figure', {},
+      el('img', { src: report.images.get(key), alt: `Chromatogramme ${x.result.name} à la position ${v.names.c}` }),
+      el('figcaption', {}, `${x.result.name} (${x.result.strand === '+' ? 'Forward' : 'Reverse'}) — position du variant recherché surlignée : ${soughtReadVerdict(s, x)}.`)));
+  }
+  return out;
 }
 
 function renderReportPreview() {
@@ -722,6 +859,7 @@ function renderReportPreview() {
     ].filter(Boolean).join(' · ')),
     el('h2', {}, 'Conclusion'),
     el('p', { class: 'conclusion' }, $('repConclusion').value.trim() || '—'),
+    ...soughtSection(),
     el('h2', {}, selected.length > 1 ? 'Variants retenus' : 'Variant retenu'),
     ...variants,
     el('p', { class: 'disclaimer' }, `Analyse réalisée avec ${NAME} ${releaseLabel()} (déconvolution d’allèles de chromatogrammes Sanger, méthode inspirée de Tracy, Rausch et al., BMC Genomics 2020), outil de recherche non validé pour le diagnostic. Les nomenclatures p. sont prédites. Tout variant doit être confirmé visuellement sur le chromatogramme et par une méthode validée ; l’absence de variant détecté n’exclut pas un variant non détectable par cette méthode (mosaïque, grande délétion, allèle non amplifié).`),

@@ -22,13 +22,18 @@ export function analysedRegion(ref, results) {
 }
 
 /**
- * Conclusion : une phrase par variant retenu, {variant, classId}, dans l'ordre fourni, puis
- * « Patient porteur. » ; en l'absence de variant retenu, absence de variant dans la région analysée,
- * puis « Patient non porteur. ».
+ * Conclusion : absence du ou des variants recherchés non retrouvés (`absent`), puis une phrase par
+ * variant retenu, {variant, classId}, et enfin « Patient porteur. » ou « Patient non porteur. ».
+ * Sans variant recherché ni retenu : absence de variant dans la région analysée.
  */
-export function conclusion(selected, ref, results) {
+export function conclusion(selected, ref, results, absent = []) {
   const gene = geneOf(ref);
   const transcript = ref.transcript?.id;
+  if (absent.length) {
+    const lines = absent.map(v => `Absence du variant ${v.names.c || v.names.g}${v.protein?.short ? ` ${v.protein.short}` : ''} recherché dans le gène ${gene}.`);
+    const found = selected.length ? conclusion(selected, ref, results).split('\n').slice(0, -1) : [];
+    return [...lines, ...found, selected.length ? 'Patient porteur.' : 'Patient non porteur.'].join('\n');
+  }
   if (!selected.length) {
     const region = analysedRegion(ref, results);
     return `Absence de variant détecté dans la région analysée du gène ${gene}${transcript ? ` (${transcript}` : ''}${region ? `${transcript ? ', ' : ' ('}${region})` : transcript ? ')' : ''}.\nPatient non porteur.`;

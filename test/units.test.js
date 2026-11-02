@@ -105,3 +105,21 @@ test('localisation exon / intron', async () => {
   assert.equal(variantLocation({ pos: 50, del: 'A', ins: 'G' }, m), 'en amont du gène');
   assert.equal(variantLocation({ pos: 450, del: 'A', ins: 'G' }, null), null);
 });
+
+test('lecture d’une description c. tapée par l’utilisateur', async () => {
+  const { parseVariantC, transcriptMapper: tm, describe: d } = await import('../src/hgvs.js');
+  // Exons g.101–200 et g.301–400 ; CDS à partir du nt 51 du transcrit (c.1 = g.151).
+  const seq = 'A'.repeat(100) + 'ACGTACGTAC'.repeat(10) + 'T'.repeat(100) + 'GGCCAATTGG'.repeat(10) + 'C'.repeat(100);
+  const ref = { seq, mapper: tm({ exons: [[101, 200], [301, 400]], cdsStart: 51, cdsEnd: 150 }), accession: 'NG_X.1' };
+  const name = t => { const { variant } = parseVariantC(t, ref); return d(variant, ref.mapper.c); };
+  for (const g of [151, 150, 200, 201, 300, 260, 400, 401]) assert.equal(ref.mapper.g(ref.mapper.c(g)), g);
+  assert.equal(name(`c.1${seq[150]}>T`), `1${seq[150]}>T`);
+  assert.equal(name('NM_X.1:c.2_3del'), '2_3del');
+  assert.equal(ref.mapper.g('50+3'), 203);
+  assert.equal(name('c.50+3del'), '51-1del'); // dans un bloc de T : décalée au plus 3′ (règle HGVS)
+  assert.equal(parseVariantC('c.3dup', ref).variant.type, 'dup');
+  assert.equal(parseVariantC('c.5_6insGG', ref).variant.ins.length, 2);
+  assert.throws(() => parseVariantC(`c.1${seq[150] === 'A' ? 'C' : 'A'}>T`, ref), /la référence porte/);
+  assert.throws(() => parseVariantC('1813dup', ref), /commencer par « c. »/);
+  assert.throws(() => parseVariantC('c.5xyz', ref), /type de variant/);
+});

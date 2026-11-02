@@ -121,3 +121,15 @@ textarea { font: inherit; color: inherit; background: var(--card); width: 100%; 
   main, #step-report { padding: 0; margin: 0; border: 0; box-shadow: none; max-width: none; }
   #reportView { display: block !important; border: 0; padding: 0; margin: 0; }
 }
+
+#sought { width: 220px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.sought-box { margin-top: 10px; padding: 12px 14px; border-radius: 8px; border: 1px solid var(--border); border-left: 4px solid var(--accent); background: var(--card); font-size: 14px; }
+.sought-box.found { border-left-color: var(--ok); }
+.sought-box.absent { border-left-color: var(--warn); }
+.sought-box.error { border-left-color: var(--bad); color: var(--bad); }
+.sought-box h3 { margin: 0 0 6px; font-size: 15px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.sought-box ul { margin: 6px 0 0; padding-left: 18px; }
+.sought-box li { margin: 3px 0; }
+.sought-box button { padding: 2px 8px; font-size: 12px; margin-left: 6px; }
+#variantTable tr.sought td { box-shadow: inset 0 2px 0 var(--accent), inset 0 -2px 0 var(--accent); }
+#variantTable tr.sought td:first-child { box-shadow: inset 2px 2px 0 var(--accent), inset 0 -2px 0 var(--accent); }
