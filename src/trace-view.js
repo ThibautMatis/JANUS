@@ -1,12 +1,20 @@
 // Affichage d'un chromatogramme sur <canvas> : déplacement, zoom, sélection d'une base,
-// avec sous les pics la référence et les deux allèles reconstruits.
+// avec sous les pics la séquence du génome et les deux allèles reconstruits.
+//
+// La ligne Génome est continue : chaque base du génome a sa colonne. Une base du génome sans pic en
+// face (délétion par rapport à la lecture) reçoit une colonne insérée entre deux pics : le tracé s'y
+// écarte d'autant, comme dans un alignement, et les lignes de la lecture y portent un « – ».
 
 // G est lu dans --trace-g pour rester visible en thème sombre.
 const COLORS = { A: '#1a8a4f', C: '#2463c7', G: '#30353b', T: '#d0383a' };
 const OTHER = '#8c60a7';
+const MONO = 'ui-monospace, SFMono-Regular, Menlo, monospace';
 
 export class TraceView {
-  /** onSelect(k) : clic sur une base ; label(k) → [titre, détail] affichés au survol (barre verticale). */
+  /**
+   * onSelect(k) : clic sur une base de la lecture ;
+   * label(colonne) → [titre, détail] au survol (colonne = { k } pour une base lue, { gap } sinon).
+   */
   constructor(canvas, { onSelect, label } = {}) {
     this.canvas = canvas;
     this.onSelect = onSelect;
@@ -16,6 +24,7 @@ export class TraceView {
     this.start = 0;
     this.count = 45;
     this.annotations = new Map();
+    this.gaps = new Map();
     this.markers = [];
     this.bindEvents();
     // Au redimensionnement, on garde la même densité de bases par pixel autour du centre de la vue.
@@ -32,11 +41,14 @@ export class TraceView {
     }).observe(canvas);
   }
 
-  /** read : { bases, positions, traces } ; annotations : Map(indexBase → {ref, a1, a2}) ; markers : [indexBase]. */
-  setRead(read, annotations = new Map(), markers = []) {
-    this.read = read;
-    this.annotations = annotations;
-    this.markers = markers;
+  /**
+   * read : { bases, positions, traces } ;
+   * annotations : Map(indexBase → { genome, a1, a2 }) — génome « - » pour une base lue absente du génome ;
+   * gaps : Map(indexBase → [{ genome, g }]) — bases du génome sans pic, placées après cette base lue ;
+   * markers : [indexBase] surlignés.
+   */
+  setRead(read, annotations = new Map(), markers = [], gaps = new Map()) {
+    Object.assign(this, { read, annotations, markers, gaps });
     this.show(0, Math.min(this.comfortable(), read.bases.length));
   }
 
@@ -57,6 +69,30 @@ export class TraceView {
     this.show(this.start + anchor * (this.count - next), next);
   }
 
+  /**
+   * Coordonnée « virtuelle » d'un point du tracé : position en échantillons, augmentée d'un espacement
+   * de base pour chaque colonne de génome insérée avant lui.
+   */
+  virtualScale() {
+    const { positions } = this.read;
+    const diffs = [];
+    for (let k = 1; k < positions.length; k++) diffs.push(positions[k] - positions[k - 1]);
+    diffs.sort((a, b) => a - b);
+    const spacing = diffs[Math.floor(diffs.length / 2)] || 12;
+    const cuts = [...this.gaps.entries()]
+      .filter(([k]) => k + 1 < positions.length)
+      .map(([k, cols]) => ({ k, at: (positions[k] + positions[k + 1]) / 2, n: cols.length }))
+      .sort((a, b) => a.at - b.at);
+    let before = 0;
+    for (const c of cuts) { c.before = before; before += c.n; }
+    const v = s => {
+      let extra = 0;
+      for (const c of cuts) { if (c.at < s) extra = c.before + c.n; else break; }
+      return s + extra * spacing;
+    };
+    return { v, cuts, spacing };
+  }
+
   draw() {
     const { canvas, read } = this;
     // width / height / dpr fixes : rendu hors écran (capture pour le rapport).
@@ -74,107 +110,103 @@ export class TraceView {
     const colors = { ...COLORS, G: css.getPropertyValue('--trace-g').trim() || COLORS.G };
     const muted = css.getPropertyValue('--muted').trim() || '#647587';
     const accent = css.getPropertyValue('--accent').trim() || '#147b95';
-    const warn = css.getPropertyValue('--bad').trim() || '#b3261e';
-    const rows = this.annotations.size ? 4 : 0;
+    const rows = this.annotations.size ? 3 : 0;
     const labelH = 18, rowH = 15, bottom = 26 + labelH + rows * rowH;
     const plotH = H - bottom - 8;
 
     const end = Math.min(read.bases.length, this.start + this.count);
     const x0 = Math.max(0, read.positions[this.start] - 8);
     const x1 = Math.min(read.traces.A.length - 1, read.positions[end - 1] + 8);
-    const span = Math.max(1, x1 - x0);
-    const X = s => ((s - x0) / span) * (W - 70) + 60;
+    const { v, cuts, spacing } = this.virtualScale();
+    const v0 = v(x0), v1 = v(x1), span = Math.max(1, v1 - v0);
+    const X = u => ((u - v0) / span) * (W - 70) + 60;
     let ymax = 1;
     for (const b of 'ACGT') for (let i = x0; i <= x1; i++) if (read.traces[b][i] > ymax) ymax = read.traces[b][i];
-    this.geometry = { x0, x1, span, end, W };
+
+    // Colonnes visibles : bases lues et bases du génome insérées entre elles.
+    const layout = [];
+    for (let k = this.start; k < end; k++) {
+      layout.push({ k, x: X(v(read.positions[k])) });
+      const cut = cuts.find(c => c.k === k);
+      if (cut && k + 1 < end) {
+        const vStart = cut.at + cut.before * spacing;
+        this.gaps.get(k).forEach((gap, i) => layout.push({ k: null, gap, x: X(vStart + (i + 0.5) * spacing) }));
+      }
+    }
+    this.layout = layout;
 
     // Variants signalés.
     ctx.fillStyle = accent + '22';
-    for (const m of this.markers) {
-      if (m < this.start || m >= end) continue;
-      const half = Math.max(4, ((read.positions[Math.min(m + 1, end - 1)] - read.positions[Math.max(m - 1, this.start)]) / span) * (W - 70) / 4);
-      ctx.fillRect(X(read.positions[m]) - half, 0, 2 * half, H - 6);
-    }
+    const half = Math.max(4, (W - 70) / Math.max(1, layout.length) / 2);
+    for (const c of layout) if (c.k !== null && this.markers.includes(c.k)) ctx.fillRect(c.x - half, 0, 2 * half, H - 6);
 
     ctx.lineWidth = 1.4;
     for (const b of 'ACGT') {
       ctx.beginPath();
       ctx.strokeStyle = colors[b];
       const t = read.traces[b];
+      let prevV = null;
       for (let i = x0; i <= x1; i++) {
-        const x = X(i), y = 8 + plotH - (t[i] / ymax) * plotH;
-        if (i === x0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        const vi = v(i), x = X(vi), y = 8 + plotH - (t[i] / ymax) * plotH;
+        // Colonne de génome insérée : le tracé s'interrompt au lieu d'être étiré en diagonale.
+        if (prevV === null || vi - prevV > 1.5) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        prevV = vi;
       }
       ctx.stroke();
     }
 
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    const perBase = (W - 70) / this.count;
-    const step = perBase < 3 ? 50 : perBase < 6 ? 20 : perBase < 12 ? 10 : 5;
-    const showLetters = this.count <= (W - 70) / 9;
+    const perCol = (W - 70) / Math.max(1, layout.length);
+    const step = perCol < 3 ? 50 : perCol < 6 ? 20 : perCol < 12 ? 10 : 5;
+    const showLetters = perCol >= 9;
     const yBase = H - bottom + labelH / 2 + 4;
-    for (let k = this.start; k < end; k++) {
-      const x = X(read.positions[k]);
+    const letter = (b, x, y, color, bold = false) => {
+      ctx.font = `${bold ? '700 ' : ''}12px ${MONO}`;
+      ctx.fillStyle = color;
+      ctx.fillText(b, x, y);
+    };
+    for (const col of layout) {
+      const { x } = col;
       if (showLetters) {
-        ctx.font = '600 13px ui-monospace, SFMono-Regular, Menlo, monospace';
-        ctx.fillStyle = colors[read.bases[k]] || OTHER;
-        ctx.fillText(read.bases[k], x, yBase);
-        const a = this.annotations.get(k);
+        if (col.k === null) {
+          // Base du génome sans pic en face : génome en clair, « – » sur la lecture et les allèles.
+          letter('–', x, yBase, muted);
+          letter(col.gap.genome, x, yBase + labelH, colors[col.gap.genome] || muted);
+          letter('–', x, yBase + labelH + rowH, accent, true);
+          letter('–', x, yBase + labelH + 2 * rowH, accent, true);
+          continue;
+        }
+        ctx.font = `600 13px ${MONO}`;
+        ctx.fillStyle = colors[read.bases[col.k]] || OTHER;
+        ctx.fillText(read.bases[col.k], x, yBase);
+        const a = this.annotations.get(col.k);
         if (a) {
-          ctx.font = '12px ui-monospace, SFMono-Regular, Menlo, monospace';
-          // Lignes : génome (alignement direct, contrôle), réf. projetée par JANUS, allèles 1 et 2.
-          [a.genome, a.ref, a.a1, a.a2].forEach((b, r) => {
-            if (!b) return;
-            // Génome ≠ réf. JANUS sur un pic simple : à vérifier. En zone de doubles pics, l'alignement direct
-            // suit l'allèle dominant et diffère normalement de JANUS : pas d'alerte.
-            const mismatch = r === 0 && a.ref && b !== a.ref && !a.mixedZone;
-            const differs = r > 1 && b !== a.ref;
-            ctx.fillStyle = mismatch ? warn : differs ? accent : (colors[b] || muted);
-            if (differs || mismatch) ctx.font = '700 12px ui-monospace, SFMono-Regular, Menlo, monospace';
-            ctx.fillText(b, x, yBase + labelH + r * rowH);
-            ctx.font = '12px ui-monospace, SFMono-Regular, Menlo, monospace';
+          letter(a.genome, x, yBase + labelH, a.genome === '-' ? muted : (colors[a.genome] || muted));
+          [a.a1, a.a2].forEach((b, r) => {
+            const differs = b !== a.genome;
+            letter(b, x, yBase + labelH + (r + 1) * rowH, differs ? accent : (colors[b] || muted), differs);
           });
-          // Bases du génome sans base lue en face (alignement direct) : écrites en petit entre deux pics,
-          // pour que la ligne Génome reste continue.
-          if (a.genomeGap) {
-            const nb = a.genomeGapSide === 'before' ? k - 1 : k + 1;
-            const xn = nb >= 0 && nb < read.bases.length ? X(read.positions[nb]) : x + (a.genomeGapSide === 'before' ? -10 : 10);
-            // Écrites en clair, entre la ligne Lecture et la ligne Génome (≤ 4 bases ; au-delà, leur nombre).
-            ctx.fillStyle = warn;
-            ctx.font = '700 11px ui-monospace, SFMono-Regular, Menlo, monospace';
-            ctx.fillText(a.genomeGap.length > 4 ? `▾${a.genomeGap.length} nt` : `▾${a.genomeGap}`, (x + xn) / 2, yBase + labelH - 9);
-            ctx.font = '12px ui-monospace, SFMono-Regular, Menlo, monospace';
-          }
-          // Base(s) de référence sautée(s) par l'alignement de JANUS : repère ▾ entre deux bases, ligne Réf.
-          if (a.skipped && a.skipped !== a.genomeGap) { // déjà affichées sur la ligne Génome sinon
-            const nb = a.skippedSide === 'before' ? k - 1 : k + 1;
-            const xn = nb >= 0 && nb < read.bases.length ? X(read.positions[nb]) : x + (a.skippedSide === 'before' ? -10 : 10);
-            const xm = (x + xn) / 2;
-            ctx.fillStyle = accent;
-            ctx.font = '700 11px system-ui, sans-serif';
-            ctx.fillText(a.skipped.length > 1 ? `▾${a.skipped.length}` : '▾', xm, yBase + labelH + rowH - 9);
-            ctx.font = '12px ui-monospace, SFMono-Regular, Menlo, monospace';
-          }
         }
       }
-      if ((k + 1) % step === 0) {
+      if (col.k !== null && (col.k + 1) % step === 0) {
         ctx.font = '10px system-ui, sans-serif';
         ctx.fillStyle = muted;
-        ctx.fillText(String(k + 1), x, H - 10);
+        ctx.fillText(String(col.k + 1), x, H - 10);
       }
     }
     ctx.textAlign = 'left';
     ctx.font = '11px system-ui, sans-serif';
     ctx.fillStyle = muted;
     ctx.fillText('Lecture', 4, yBase);
-    if (rows) ['Génome', 'Réf. JANUS', 'Allèle 1', 'Allèle 2'].forEach((t, r) => ctx.fillText(t, 4, yBase + labelH + r * rowH));
+    if (rows) ['Génome', 'Allèle 1', 'Allèle 2'].forEach((t, r) => ctx.fillText(t, 4, yBase + labelH + r * rowH));
 
-    if (this.hover !== null && this.hover >= this.start && this.hover < end) this.drawHover(ctx, X(read.positions[this.hover]), W, H, css, accent);
+    if (this.hover !== null && layout[this.hover]) this.drawHover(ctx, layout[this.hover], W, H, css, accent);
   }
 
-  /** Barre verticale sur la base survolée et étiquette (position c., détail). */
-  drawHover(ctx, x, W, H, css, accent) {
+  /** Barre verticale sur la colonne survolée et étiquette (position c., détail). */
+  drawHover(ctx, col, W, H, css, accent) {
+    const x = col.x;
     ctx.save();
     ctx.strokeStyle = accent;
     ctx.lineWidth = 1;
@@ -184,8 +216,8 @@ export class TraceView {
     ctx.lineTo(Math.round(x) + 0.5, H);
     ctx.stroke();
     ctx.setLineDash([]);
-    const [title, detail] = this.label ? this.label(this.hover) : [`base ${this.hover + 1}`, ''];
-    ctx.font = '700 13px ui-monospace, SFMono-Regular, Menlo, monospace';
+    const [title, detail] = this.label ? this.label(col) : [col.k !== null ? `base ${col.k + 1}` : 'génome', ''];
+    ctx.font = `700 13px ${MONO}`;
     const w1 = ctx.measureText(title).width;
     ctx.font = '11px system-ui, sans-serif';
     const w2 = detail ? ctx.measureText(detail).width : 0;
@@ -200,7 +232,7 @@ export class TraceView {
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = css.getPropertyValue('--text').trim() || '#17293a';
-    ctx.font = '700 13px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx.font = `700 13px ${MONO}`;
     ctx.fillText(title, bx + 8, by + 11);
     if (detail) {
       ctx.font = '11px system-ui, sans-serif';
@@ -210,15 +242,13 @@ export class TraceView {
     ctx.restore();
   }
 
-  baseAt(clientX) {
-    const g = this.geometry;
-    if (!g || !this.read) return null;
+  /** Indice (dans this.layout) de la colonne la plus proche d'une abscisse écran. */
+  columnAt(clientX) {
+    if (!this.layout?.length) return null;
     const rect = this.canvas.getBoundingClientRect();
-    const s = g.x0 + ((clientX - rect.left - 60) / (g.W - 70)) * g.span;
-    let best = this.start;
-    for (let k = this.start; k < g.end; k++) {
-      if (Math.abs(this.read.positions[k] - s) < Math.abs(this.read.positions[best] - s)) best = k;
-    }
+    const x = clientX - rect.left;
+    let best = 0;
+    this.layout.forEach((c, i) => { if (Math.abs(c.x - x) < Math.abs(this.layout[best].x - x)) best = i; });
     return best;
   }
 
@@ -232,10 +262,10 @@ export class TraceView {
     });
     c.addEventListener('pointermove', e => {
       if (!drag) {
-        // Survol à la souris : barre verticale et position de la base (pas au doigt, réservé au glisser).
+        // Survol à la souris : barre verticale et position de la colonne (pas au doigt, réservé au glisser).
         if (e.pointerType === 'touch' || !this.read) return;
-        const k = this.baseAt(e.clientX);
-        if (k !== this.hover) { this.hover = k; this.draw(); }
+        const i = this.columnAt(e.clientX);
+        if (i !== this.hover) { this.hover = i; this.draw(); }
         return;
       }
       if (this.hover !== null) this.hover = null;
@@ -245,8 +275,9 @@ export class TraceView {
     });
     c.addEventListener('pointerup', e => {
       if (drag && !drag.moved && this.onSelect) {
-        const k = this.baseAt(e.clientX);
-        if (k !== null) this.onSelect(k);
+        const i = this.columnAt(e.clientX);
+        const col = i !== null ? this.layout[i] : null;
+        if (col && col.k !== null) this.onSelect(col.k);
       }
       drag = null;
     });
@@ -270,13 +301,13 @@ export class TraceView {
  * Image PNG (data URL) d'un chromatogramme centré sur la base `center`, en couleurs claires,
  * pour le rapport imprimable.
  */
-export function snapshot(read, annotations, markers, center, { width = 1000, height = 300, count = 41 } = {}) {
+export function snapshot(read, annotations, markers, center, { width = 1000, height = 300, count = 41, gaps = new Map() } = {}) {
   const canvas = document.createElement('canvas');
   const view = Object.create(TraceView.prototype);
   const n = read.bases.length;
   count = Math.min(n, count);
   Object.assign(view, {
-    canvas, read, annotations, markers, width, height, dpr: 2, hover: null, label: null,
+    canvas, read, annotations, markers, gaps, width, height, dpr: 2, hover: null, label: null,
     count, start: Math.max(0, Math.min(n - count, Math.round(center - count / 2))),
   });
   view.draw();

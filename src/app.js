@@ -3,7 +3,7 @@
 import { parseABIF } from './abif.js';
 import { analyzeRead, mergeCalls } from './decompose.js';
 import { fetchGenBank, loadGene, referenceFromRecord, referenceFromFasta, referenceFromGenBank, preferredTranscript, listTranscripts } from './reference.js';
-import { complement, revcomp } from './sequence.js';
+import { complement } from './sequence.js';
 import { TraceView, snapshot } from './trace-view.js';
 import { CLASSES, classOf, conclusion, geneOf } from './report.js';
 import { NAME, releaseLabel } from './version.js';
@@ -395,60 +395,47 @@ $('exportCsv').addEventListener('click', () => {
 // ---------------------------------------------------------------------------
 // 4. Chromatogramme
 
-const view = new TraceView($('trace'), { onSelect: k => describeBase(k), label: k => hoverLabel(k) });
+const view = new TraceView($('trace'), { onSelect: k => describeBase(k), label: col => hoverLabel(col) });
 
-/** Étiquette de survol : position c. (sinon g.) en titre, puis g., base de la lecture et allèles. */
-function hoverLabel(k) {
-  const r = view.result, a = view.annotationMap?.get(k);
-  if (!r || !a?.g) return [`base ${k + 1}`, k < r?.trim[0] || k >= r?.trim[1] ? 'hors de la zone analysée' : 'non alignée sur la référence'];
-  const c = state.ref.mapper ? `c.${state.ref.mapper.c(a.g)}` : null;
+/** Étiquette de survol : position c. (sinon g.) en titre, puis g., base de la lecture, génome et allèles. */
+function hoverLabel(col) {
+  const r = view.result;
+  const cOf = g => (state.ref.mapper ? `c.${state.ref.mapper.c(g)}` : null);
+  if (col.k === null) {
+    const { g, genome } = col.gap;
+    return [cOf(g) || `g.${g}`, [cOf(g) ? `g.${g}` : null, `génome ${genome}`, 'aucun pic en face (base absente de la lecture)'].filter(Boolean).join(' · ')];
+  }
+  const k = col.k, a = view.annotationMap?.get(k);
+  if (!r || !a?.g) return [`base ${k + 1}`, k < r?.trim[0] || k >= r?.trim[1] ? 'hors de la zone analysée' : a?.genome === '-' ? 'base lue absente du génome (insertion)' : 'non alignée sur la référence'];
   const alleles = a.a1 === a.a2 ? `${a.a1}` : `${a.a1}/${a.a2}`;
   // Bases dans le sens de la lecture, comme sous les pics : complémentaires du transcrit sur une Reverse.
   const strand = r.strand === '-' ? ' (brin −)' : '';
-  const gap = a.skipped ? `${a.skipped.length} base(s) de référence (${a.skipped}) sans pic ${a.skippedSide === 'before' ? 'juste avant' : 'juste après'}` : null;
-  const genome = a.genome ? `génome ${a.genome}${a.genome !== a.ref ? ' ≠ réf. JANUS' : ''}` : null;
-  return [c || `g.${a.g}`, [c ? `g.${a.g}` : null, `base ${k + 1}`, genome, `réf. ${a.ref}`, `allèles ${alleles}${strand}`, gap].filter(Boolean).join(' · ')];
+  return [cOf(a.g) || `g.${a.g}`, [cOf(a.g) ? `g.${a.g}` : null, `base ${k + 1}`, `génome ${a.genome}`, `allèles ${alleles}${strand}`].filter(Boolean).join(' · ')];
 }
 
-/** Annotations par base d'origine : référence et allèles, dans le sens de la lecture. */
+/**
+ * Annotations d'une lecture, dans le sens de la lecture, à partir de l'alignement de JANUS sur
+ * l'allèle de référence :
+ *  - map : base lue → { genome, a1, a2, g } (génome « - » pour une base lue absente du génome) ;
+ *  - gaps : base lue → bases du génome sans pic, à afficher juste après elle (ligne Génome continue).
+ */
 function annotationsOf(result) {
-  const map = new Map(), flip = result.strand === '-';
+  const map = new Map(), gaps = new Map(), flip = result.strand === '-';
   const show = b => (flip && b !== '-' ? complement(b) : b);
-  // Bases de référence sans pic en face (gap de l'alignement) : rattachées à la base lue voisine, côté
-  // gap dans le sens de lecture (avant elle en Forward, après elle en Reverse), pour rester visibles.
-  let skipped = '';
+  let pending = [], prev = null;
   for (const c of result.cols) {
-    if (c.q === null) { skipped += c.ref; continue; }
-    const index = result.profile[c.q].index;
-    const a = { ref: show(c.ref), a1: show(c.a1), a2: show(c.a2), g: c.t !== null ? result.winStart + c.t + 1 : null, mixed: c.mixed };
-    if (skipped) { a.skipped = flip ? [...skipped].reverse().map(complement).join('') : skipped; a.skippedSide = flip ? 'after' : 'before'; }
-    skipped = '';
-    map.set(index, a);
-  }
-  // Zone de doubles pics (±5 bases) : la ligne Génome y suit l'allèle dominant, sans alerte.
-  const keys = [...map.keys()].sort((x, y) => x - y);
-  keys.forEach((k, i) => {
-    const near = keys.slice(Math.max(0, i - 5), i + 6).map(j => map.get(j));
-    map.get(k).mixedZone = near.filter(a => a.mixed).length >= 0.35 * near.length;
-  });
-  // Ligne Génome. En zone de pics simples : alignement direct des bases du séquenceur (contrôle
-  // indépendant de JANUS). En zone de doubles pics (et à ±3 bases), le séquenceur suit l'allèle dominant
-  // et son alignement saute ou décale des bases : on reprend la position de JANUS, sur l'allèle normal,
-  // pour que la séquence du génome reste continue et lisible sous les pics.
-  const ck = result.check;
-  const nearMixed = k => { for (let j = k - 3; j <= k + 3; j++) if (map.get(j)?.mixedZone) return true; return false; };
-  const all = new Set([...map.keys(), ...(ck ? ck.genome.keys() : [])]);
-  for (const k of all) {
-    const a = map.get(k) || {};
-    if (a.ref && a.ref !== '-' && nearMixed(k)) {
-      a.genome = a.ref;
-    } else if (ck) {
-      if (ck.genome[k] !== null && ck.genome[k] !== undefined) a.genome = show(ck.genome[k]);
-      if (ck.gapBefore[k]) { a.genomeGap = flip ? revcomp(ck.gapBefore[k]) : ck.gapBefore[k]; a.genomeGapSide = flip ? 'after' : 'before'; }
+    if (c.q === null) { pending.push({ genome: show(c.ref), g: result.winStart + c.t + 1 }); continue; }
+    const k = result.profile[c.q].index;
+    map.set(k, { genome: show(c.ref), a1: show(c.a1), a2: show(c.a2), g: c.t !== null ? result.winStart + c.t + 1 : null, mixed: c.mixed });
+    if (pending.length && prev !== null) {
+      // Forward : entre la base lue précédente et celle-ci. Reverse : la lecture parcourt la référence à
+      // l'envers, les bases sautées viennent après celle-ci, dans l'ordre inverse.
+      if (flip) gaps.set(k, pending.reverse()); else gaps.set(prev, pending);
     }
-    if (a.genome || a.genomeGap) map.set(k, a);
+    pending = [];
+    prev = k;
   }
-  return map;
+  return { map, gaps };
 }
 
 /** Bilan du contrôle direct d'une lecture : discordances et alertes non expliquées par les variants retenus. */
@@ -483,8 +470,9 @@ function showTrace(i, center = null) {
   if (!r) return;
   if (view.result !== r) {
     view.result = r;
-    view.annotationMap = annotationsOf(r);
-    view.setRead(r.read, view.annotationMap, r.variants.map(v => v.readBase - 1));
+    const ann = annotationsOf(r);
+    view.annotationMap = ann.map;
+    view.setRead(r.read, ann.map, r.variants.map(v => v.readBase - 1), ann.gaps);
   }
   if (center !== null) {
     view.centerOn(center);
@@ -500,7 +488,7 @@ function describeBase(k) {
   if (a?.g) {
     text += ` · g.${a.g}`;
     if (state.ref.mapper) text += ` · c.${state.ref.mapper.c(a.g)}`;
-    text += ` · réf. ${a.ref} · allèle 1 ${a.a1} · allèle 2 ${a.a2}`;
+    text += ` · génome ${a.genome} · allèle 1 ${a.a1} · allèle 2 ${a.a2}`;
   } else if (k < r.trim[0] || k >= r.trim[1]) {
     text += ' · hors de la zone analysée (extrémité de lecture)';
   }
@@ -643,17 +631,20 @@ function variantFigures(v) {
       if (!result) return null;
       // Base de la lecture la plus proche de la position du variant sur la référence.
       let center = null, best = Infinity;
-      for (const [k, a] of annotationsOf(result)) if (a.g && Math.abs(a.g - (v.pos + 1)) < best) { best = Math.abs(a.g - (v.pos + 1)); center = k; }
+      for (const [k, a] of annotationsOf(result).map) if (a.g && Math.abs(a.g - (v.pos + 1)) < best) { best = Math.abs(a.g - (v.pos + 1)); center = k; }
       return center === null ? null : { result, center, how: 'confirmé par modélisation' };
     }),
   ].filter(Boolean);
   return sources.map(({ result, center, how }) => {
     const key = `${v.key}|${result.name}`;
-    if (!report.images.has(key)) report.images.set(key, snapshot(result.read, annotationsOf(result), [center], center));
+    if (!report.images.has(key)) {
+      const ann = annotationsOf(result);
+      report.images.set(key, snapshot(result.read, ann.map, [center], center, { gaps: ann.gaps }));
+    }
     const pos = state.ref.mapper ? `c.${state.ref.mapper.c(v.pos + 1)}` : `g.${v.pos + 1}`;
     return el('figure', {},
       el('img', { src: report.images.get(key), alt: `Chromatogramme ${result.name} autour de ${pos}` }),
-      el('figcaption', {}, `${result.name} (${result.strand === '+' ? 'Forward' : 'Reverse'}, ${how}) — base ${center + 1} surlignée ; lignes : lecture, génome, réf. JANUS, allèle 1, allèle 2 (sens de lecture).`));
+      el('figcaption', {}, `${result.name} (${result.strand === '+' ? 'Forward' : 'Reverse'}, ${how}) — base ${center + 1} surlignée ; lignes : lecture, génome, allèle 1, allèle 2 (sens de lecture).`));
   });
 }
 
