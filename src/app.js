@@ -431,16 +431,22 @@ function annotationsOf(result) {
     const near = keys.slice(Math.max(0, i - 5), i + 6).map(j => map.get(j));
     map.get(k).mixedZone = near.filter(a => a.mixed).length >= 0.35 * near.length;
   });
-  // Ligne Génome : alignement direct des bases du séquenceur (contrôle indépendant de JANUS).
+  // Ligne Génome. En zone de pics simples : alignement direct des bases du séquenceur (contrôle
+  // indépendant de JANUS). En zone de doubles pics (et à ±3 bases), le séquenceur suit l'allèle dominant
+  // et son alignement saute ou décale des bases : on reprend la position de JANUS, sur l'allèle normal,
+  // pour que la séquence du génome reste continue et lisible sous les pics.
   const ck = result.check;
-  if (ck) {
-    for (let k = 0; k < ck.genome.length; k++) {
-      if (ck.genome[k] === null && !ck.gapBefore[k]) continue;
-      const a = map.get(k) || {};
-      if (ck.genome[k] !== null) a.genome = show(ck.genome[k]);
+  const nearMixed = k => { for (let j = k - 3; j <= k + 3; j++) if (map.get(j)?.mixedZone) return true; return false; };
+  const all = new Set([...map.keys(), ...(ck ? ck.genome.keys() : [])]);
+  for (const k of all) {
+    const a = map.get(k) || {};
+    if (a.ref && a.ref !== '-' && nearMixed(k)) {
+      a.genome = a.ref;
+    } else if (ck) {
+      if (ck.genome[k] !== null && ck.genome[k] !== undefined) a.genome = show(ck.genome[k]);
       if (ck.gapBefore[k]) { a.genomeGap = flip ? revcomp(ck.gapBefore[k]) : ck.gapBefore[k]; a.genomeGapSide = flip ? 'after' : 'before'; }
-      map.set(k, a);
     }
+    if (a.genome || a.genomeGap) map.set(k, a);
   }
   return map;
 }

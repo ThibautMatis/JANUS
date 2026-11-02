@@ -140,13 +140,14 @@ export class TraceView {
           if (a.genomeGap) {
             const nb = a.genomeGapSide === 'before' ? k - 1 : k + 1;
             const xn = nb >= 0 && nb < read.bases.length ? X(read.positions[nb]) : x + (a.genomeGapSide === 'before' ? -10 : 10);
+            // Écrites en clair, entre la ligne Lecture et la ligne Génome (≤ 4 bases ; au-delà, leur nombre).
             ctx.fillStyle = warn;
-            ctx.font = '700 9px ui-monospace, SFMono-Regular, Menlo, monospace';
-            ctx.fillText(a.genomeGap.length > 3 ? `+${a.genomeGap.length}` : a.genomeGap, (x + xn) / 2, yBase + labelH - 2);
+            ctx.font = '700 11px ui-monospace, SFMono-Regular, Menlo, monospace';
+            ctx.fillText(a.genomeGap.length > 4 ? `▾${a.genomeGap.length} nt` : `▾${a.genomeGap}`, (x + xn) / 2, yBase + labelH - 9);
             ctx.font = '12px ui-monospace, SFMono-Regular, Menlo, monospace';
           }
           // Base(s) de référence sautée(s) par l'alignement de JANUS : repère ▾ entre deux bases, ligne Réf.
-          if (a.skipped) {
+          if (a.skipped && a.skipped !== a.genomeGap) { // déjà affichées sur la ligne Génome sinon
             const nb = a.skippedSide === 'before' ? k - 1 : k + 1;
             const xn = nb >= 0 && nb < read.bases.length ? X(read.positions[nb]) : x + (a.skippedSide === 'before' ? -10 : 10);
             const xm = (x + xn) / 2;
