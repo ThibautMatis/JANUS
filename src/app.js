@@ -5,7 +5,7 @@ import { analyzeRead, mergeCalls } from './decompose.js';
 import { fetchGenBank, loadGene, referenceFromRecord, referenceFromFasta, referenceFromGenBank, preferredTranscript, listTranscripts } from './reference.js';
 import { complement, revcomp } from './sequence.js';
 import { TraceView, snapshot } from './trace-view.js';
-import { CLASSES, classOf, conclusion, geneOf, analysedRegion } from './report.js';
+import { CLASSES, classOf, conclusion, geneOf } from './report.js';
 import { NAME, releaseLabel } from './version.js';
 
 document.getElementById('release').textContent = releaseLabel();
@@ -647,7 +647,7 @@ function variantFigures(v) {
     const pos = state.ref.mapper ? `c.${state.ref.mapper.c(v.pos + 1)}` : `g.${v.pos + 1}`;
     return el('figure', {},
       el('img', { src: report.images.get(key), alt: `Chromatogramme ${result.name} autour de ${pos}` }),
-      el('figcaption', {}, `${result.name} (${result.strand === '+' ? 'Forward' : 'Reverse'}, ${how}) — base ${center + 1} surlignée ; lignes : lecture, référence, allèle 1, allèle 2 (sens de lecture).`));
+      el('figcaption', {}, `${result.name} (${result.strand === '+' ? 'Forward' : 'Reverse'}, ${how}) — base ${center + 1} surlignée ; lignes : lecture, génome, réf. JANUS, allèle 1, allèle 2 (sens de lecture).`));
   });
 }
 
@@ -660,18 +660,6 @@ function renderReportPreview() {
   const ref = state.ref, gene = geneOf(ref);
   const selected = selectedForReport();
   const date = new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' });
-  const usable = state.results.filter(r => r.quality.verdict !== 'illisible');
-
-  const reads = el('table', {},
-    el('thead', {}, el('tr', {}, ['Lecture', 'Brin', 'Lisibilité', 'Contrôle direct', 'Région analysée'].map(t => el('th', {}, t)))),
-    el('tbody', {},
-      state.results.map(r => el('tr', {},
-        el('td', { class: 'mono' }, r.name),
-        el('td', {}, r.strand === '+' ? 'Forward' : 'Reverse'),
-        el('td', {}, QUALITY_TAG[r.quality.verdict][0]),
-        el('td', {}, (() => { const ck = checkSummary(r); return ck ? `${ck.ok ? 'concordant' : 'à vérifier'} — ${ck.lines.join(' · ')}` : '—'; })()),
-        el('td', { class: 'mono' }, regionLabel(r)))),
-      state.failed.map(f => el('tr', {}, el('td', { class: 'mono' }, f.name), el('td', {}, '—'), el('td', {}, 'illisible'), el('td', {}, '—'), el('td', {}, f.reason)))));
 
   const variants = selected.length
     ? selected.map(({ variant: v, classId }) => {
@@ -704,9 +692,6 @@ function renderReportPreview() {
     ].filter(Boolean).join(' · ')),
     el('h2', {}, 'Conclusion'),
     el('p', { class: 'conclusion' }, $('repConclusion').value.trim() || '—'),
-    el('h2', {}, 'Référence et région analysée'),
-    el('p', {}, `Référence génomique ${ref.accession}${ref.transcript ? `, transcrit ${ref.transcript.id}` : ''}${ref.cds?.proteinId ? `, protéine ${ref.cds.proteinId}` : ''}. Région analysée : ${analysedRegion(ref, state.results) || '—'} (${usable.length} lecture(s) exploitable(s)).`),
-    reads,
     el('h2', {}, selected.length > 1 ? 'Variants retenus' : 'Variant retenu'),
     ...variants,
     el('p', { class: 'disclaimer' }, `Analyse réalisée avec ${NAME} ${releaseLabel()} (déconvolution d’allèles de chromatogrammes Sanger, méthode inspirée de Tracy, Rausch et al., BMC Genomics 2020), outil de recherche non validé pour le diagnostic. Les nomenclatures p. sont prédites. Tout variant doit être confirmé visuellement sur le chromatogramme et par une méthode validée ; l’absence de variant détecté n’exclut pas un variant non détectable par cette méthode (mosaïque, grande délétion, allèle non amplifié).`),
