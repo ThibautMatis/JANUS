@@ -67,6 +67,23 @@ export function transcriptMapper({ exons, cdsStart, cdsEnd }) {
     }
     return '?';
   }
+  /**
+   * Inverse de c() : position génomique 1-based d'un libellé c. (« 1813 », « -25 », « *40 », « 6841+2 »,
+   * « 212-25 »), ou null si le libellé est invalide.
+   */
+  function g(label) {
+    const m = String(label).trim().match(/^([-*]?)(\d+)(?:([+-])(\d+))?$/);
+    if (!m || (m[1] === '' && m[2] === '0')) return null;
+    const n = Number(m[2]);
+    const t = m[1] === '-' ? cdsStart - n : m[1] === '*' ? cdsEnd + n : cdsStart + n - 1;
+    let pos = null;
+    if (t < 1) pos = ex[0][0] - (1 - t);
+    else if (t > tLength) pos = ex.at(-1)[1] + (t - tLength);
+    else for (let k = 0; k < ex.length; k++) if (t >= tStarts[k] && t <= tStarts[k] + ex[k][1] - ex[k][0]) pos = ex[k][0] + t - tStarts[k];
+    if (pos === null) return null;
+    if (m[3]) pos += (m[3] === '+' ? 1 : -1) * Number(m[4]);
+    return pos;
+  }
   /** Exon ou intron (numérotés dans l'ordre du transcrit) contenant la position génomique 1-based g. */
   function region(g) {
     for (let k = 0; k < ex.length; k++) {
@@ -75,7 +92,7 @@ export function transcriptMapper({ exons, cdsStart, cdsEnd }) {
     }
     return { kind: g < ex[0][0] ? 'amont' : 'aval', n: null };
   }
-  return { c, exonic, region, tLength, exons: ex };
+  return { c, g, exonic, region, tLength, exons: ex };
 }
 
 /** Description HGVS (sans préfixe) d'un variant normalisé ; `coord` convertit une position 1-based. */
@@ -113,4 +130,48 @@ export function variantLocation(v, mapper) {
   if (!v.del.length && a.kind !== b.kind) return regionLabel(a.kind === 'exon' ? a : b);
   const la = regionLabel(a), lb = regionLabel(b);
   return la === lb ? la : `${la} – ${lb}`;
+}
+
+/**
+ * Lecture d'une description HGVS c. tapée par l'utilisateur (« c.1813dup », « NM_000059.4:c.1813dupA »,
+ * « c.2311C>T », « c.212-25_239del », « c.68_69insAT », « c.100_102delinsG ») en variant normalisé
+ * {pos, del, ins, type} sur la référence génomique. Lève une erreur explicite si la description est
+ * invalide ou incohérente avec la référence (base de référence différente, position hors transcrit).
+ */
+export function parseVariantC(text, ref) {
+  if (!ref.mapper) throw new Error('aucun transcrit chargé : impossible de lire une position c.');
+  let s = String(text).trim().replace(/\s+/g, '');
+  let transcript = null;
+  const prefixed = s.match(/^([A-Z]{2}_[A-Z0-9]+(?:\.\d+)?)(?:\([^)]*\))?:(.*)$/i);
+  if (prefixed) { transcript = prefixed[1].toUpperCase(); s = prefixed[2]; }
+  if (!/^c\./i.test(s)) throw new Error('la description doit commencer par « c. » (ex. c.1813dup)');
+  s = s.slice(2).replace(/^\((.*)\)$/, '$1');
+  const m = s.match(/^([-*]?\d+(?:[+-]\d+)?)(?:_([-*]?\d+(?:[+-]\d+)?))?(.*)$/);
+  if (!m) throw new Error(`position illisible dans « ${text} »`);
+  const a = ref.mapper.g(m[1]), b = m[2] ? ref.mapper.g(m[2]) : a;
+  if (a === null || b === null) throw new Error('position c. invalide');
+  const lo = Math.min(a, b), hi = Math.max(a, b), seq = ref.seq;
+  if (lo < 1 || hi > seq.length) throw new Error('position en dehors de la référence génomique chargée');
+  const rest = m[3].toUpperCase(), span = seq.slice(lo - 1, hi);
+  const at = `c.${m[1]}${m[2] ? `_${m[2]}` : ''}`;
+  let v, k;
+  if ((k = rest.match(/^([ACGT])>([ACGT])$/))) {
+    if (lo !== hi) throw new Error('une substitution porte sur une seule position');
+    if (span !== k[1]) throw new Error(`la référence porte ${span} en ${at}, pas ${k[1]}`);
+    v = { pos: lo - 1, del: k[1], ins: k[2] };
+  } else if ((k = rest.match(/^DEL([ACGT]*)$/))) {
+    if (k[1] && k[1] !== span) throw new Error(`la référence porte ${span} en ${at}, pas ${k[1]}`);
+    v = { pos: lo - 1, del: span, ins: '' };
+  } else if ((k = rest.match(/^DUP([ACGT]*)$/))) {
+    if (k[1] && k[1] !== span) throw new Error(`la référence porte ${span} en ${at}, pas ${k[1]}`);
+    v = { pos: hi, del: '', ins: span };
+  } else if ((k = rest.match(/^DELINS([ACGT]+)$/))) {
+    v = { pos: lo - 1, del: span, ins: k[1] };
+  } else if ((k = rest.match(/^INS([ACGT]+)$/))) {
+    if (hi !== lo + 1) throw new Error('une insertion se note entre deux positions voisines (ex. c.68_69insAT)');
+    v = { pos: lo, del: '', ins: k[1] };
+  } else {
+    throw new Error(`type de variant non reconnu après la position (« ${m[3] || '—'} ») : X>Y, del, dup, ins ou delins attendu`);
+  }
+  return { variant: normalize(seq, v), transcript };
 }

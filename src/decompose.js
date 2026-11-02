@@ -649,7 +649,7 @@ function mirrorOf(v, seq) {
  * Le signal d'une lecture qui n'a pas appelé le variant est-il mieux expliqué avec lui ?
  * Retourne le gain d'ajustement (forme directe ou miroir), ou null si la lecture n'est pas informative.
  */
-function modelSupport(r, v, seq) {
+export function modelSupport(r, v, seq) {
   const end = v.pos + v.del.length;
   if (v.type === 'snv') {
     if (r.refStart + 5 > v.pos + 1 || r.refEnd - 5 < v.pos + 1) return null;

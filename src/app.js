@@ -1,16 +1,16 @@
 // Interface de JANUS : chargement de la référence, analyse des .ab1, résultats et chromatogramme.
 
 import { parseABIF } from './abif.js';
-import { analyzeRead, mergeCalls } from './decompose.js';
+import { analyzeRead, mergeCalls, modelSupport } from './decompose.js';
 import { fetchGenBank, loadGene, referenceFromRecord, referenceFromFasta, referenceFromGenBank, preferredTranscript, listTranscripts } from './reference.js';
-import { complement, revcomp } from './sequence.js';
+import { complement } from './sequence.js';
 import { TraceView, snapshot } from './trace-view.js';
-import { CLASSES, classOf, conclusion, geneOf, analysedRegion } from './report.js';
+import { CLASSES, classOf, conclusion, geneOf } from './report.js';
 import { NAME, releaseLabel } from './version.js';
 
 document.getElementById('release').textContent = releaseLabel();
-import { proteinName } from './protein.js';
-import { variantLocation } from './hgvs.js';
+import { proteinName, translate, THREE } from './protein.js';
+import { variantLocation, parseVariantC, variantKey, hgvsNames } from './hgvs.js';
 import { directCheck, explainDiscrepancy, explainShift } from './check.js';
 import { genomicMapping, gnomadId, gnomadFrequencies, gnomadUrl } from './gnomad.js';
 
@@ -186,9 +186,112 @@ $('analyze').addEventListener('click', async () => {
   renderReads();
   renderVariants();
   renderTraceSelect();
+  evaluateSought();
   resetReport();
   setStatus('readStatus', readSummary(), !results.length);
+  // Variant recherché absent : chromatogramme positionné sur sa position, sur la première lecture informative.
+  const s = state.sought;
+  if (s && !s.found) {
+    const first = s.reads.find(x => x.center !== null && x.gain !== null) || s.reads.find(x => x.center !== null);
+    if (first) { $('traceRead').value = String(state.results.indexOf(first.result)); showTrace(state.results.indexOf(first.result), first.center); }
+  }
 });
+
+// ---------------------------------------------------------------------------
+// Variant recherché : trouvé ou non, et ce que dit chaque lecture à sa position.
+
+/** Base de la lecture la plus proche d'une position génomique (null si la lecture ne la couvre pas). */
+function centerFor(result, g) {
+  let center = null, best = Infinity;
+  for (const [k, a] of annotationsOf(result).map) if (a.g && Math.abs(a.g - g) < best) { best = Math.abs(a.g - g); center = k; }
+  return best <= 2 ? center : null;
+}
+
+function evaluateSought() {
+  const text = $('sought').value.trim();
+  state.sought = null;
+  if (!text) { $('soughtStatus').hidden = true; renderVariants(); return; }
+  if (!state.ref) return renderSoughtError('chargez d’abord une référence (étape 1)');
+  let parsed;
+  try { parsed = parseVariantC(text, state.ref); } catch (e) { return renderSoughtError(e.message); }
+  const v = parsed.variant;
+  Object.assign(v, { key: variantKey(v), names: hgvsNames(v, state.ref), protein: proteinName(v, state.ref), location: variantLocation(v, state.ref.mapper) });
+  const s = { variant: v, transcript: parsed.transcript, found: null, near: null, reads: [] };
+  if (state.results.length) {
+    s.found = state.merged.find(m => m.key === v.key) || null;
+    // Indel de même bilan à quelques bases : probablement le même événement, nommé autrement.
+    const net = x => x.ins.length - x.del.length;
+    if (!s.found && v.type !== 'snv') s.near = state.merged.find(m => m.type !== 'snv' && net(m) === net(v) && Math.abs(m.pos - v.pos) <= 10) || null;
+    for (const r of state.results.filter(x => x.quality.verdict !== 'illisible')) {
+      const called = s.found?.reads.some(x => x.result === r) ? 'direct' : s.found?.supportedBy.some(x => x.name === r.name) ? 'modèle' : null;
+      s.reads.push({ result: r, called, gain: modelSupport(r, v, state.ref.seq), center: centerFor(r, v.pos + 1) });
+    }
+  }
+  state.sought = s;
+  renderSought();
+  renderVariants();
+}
+
+function renderSoughtError(message) {
+  const box = $('soughtStatus');
+  box.hidden = false;
+  box.className = 'sought-box error';
+  box.replaceChildren(el('b', {}, 'Variant recherché non valide : '), message);
+}
+
+/** Verdict d'une lecture sur le variant recherché. */
+function soughtReadVerdict(s, x) {
+  if (x.called === 'direct') return 'variant appelé';
+  if (x.called === 'modèle') return 'variant confirmé par modélisation (lecture débutant dans la zone décalée)';
+  if (x.gain === null) return x.center === null ? 'position non couverte' : 'non informative à cette position (trop près d’une extrémité)';
+  const strong = s.variant.type === 'snv' ? 2 : 20;
+  return x.gain >= strong ? 'signal compatible avec le variant, mais non appelé : à vérifier sur le chromatogramme' : 'pas de signal du variant à cette position';
+}
+
+function renderSought() {
+  const s = state.sought, box = $('soughtStatus');
+  box.hidden = false;
+  const v = s.variant;
+  const name = `${v.names.c}${v.protein?.short ? ` ${v.protein.short}` : ''}`;
+  const status = !state.results.length ? tag('sera recherché à l’analyse', 'warn')
+    : s.found ? tag(`trouvé — ${s.found.status}`, s.found.status === 'confirmé F/R' ? 'ok' : 'warn')
+    : tag('non retrouvé', 'bad');
+  box.className = 'sought-box' + (!state.results.length ? '' : s.found ? ' found' : ' absent');
+  const lines = [];
+  if (s.transcript && state.ref.transcript && s.transcript !== state.ref.transcript.id) {
+    lines.push(el('li', {}, `⚠ Saisi sur ${s.transcript}, interprété sur ${state.ref.transcript.id} : vérifier que la numérotation c. est la même.`));
+  }
+  if (s.found) {
+    const fr = s.found.reads.map(x => x.alleleFraction).filter(Number.isFinite).map(f => `${Math.round(100 * f)} %`).join(' / ');
+    lines.push(el('li', {}, `${s.found.genotype}${fr ? `, fraction ${fr}` : ''}`));
+  }
+  if (s.near) lines.push(el('li', {}, `≈ indel de même taille appelé à proximité : ${s.near.names.c || s.near.names.g} — vérifier s’il s’agit du même événement décrit autrement.`));
+  for (const x of s.reads) {
+    const go = el('button', { type: 'button', class: 'ghost' }, 'Voir');
+    go.addEventListener('click', () => {
+      const i = state.results.indexOf(x.result);
+      $('traceRead').value = String(i);
+      showTrace(i, x.center);
+      $('step-trace').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+    lines.push(el('li', {}, `${x.result.name} (${x.result.strand === '+' ? 'Forward' : 'Reverse'}) : ${soughtReadVerdict(s, x)}`, x.center !== null ? go : null));
+  }
+  box.replaceChildren(
+    el('h3', {}, 'Variant recherché : ', el('span', { class: 'mono' }, name), v.location ? el('span', { class: 'note' }, `(${v.location})`) : null, status),
+    lines.length ? el('ul', {}, lines) : '');
+}
+
+$('sought').addEventListener('change', () => {
+  evaluateSought();
+  if (!state.results.length) return;
+  // Le variant recherché, s'il est trouvé, est coché pour le rapport ; les autres choix sont conservés.
+  const f = state.sought?.found;
+  if (f && report.choices.has(f.key)) report.choices.get(f.key).checked = true;
+  renderReportTable();
+  updateConclusion();
+  renderReportPreview();
+});
+$('sought').addEventListener('keydown', e => { if (e.key === 'Enter') $('sought').dispatchEvent(new Event('change')); });
 
 /** Orientation devinée d'après le nom de fichier (lectures non localisées). */
 function strandFromName(name) {
@@ -318,7 +421,7 @@ function renderVariants() {
   }
   for (const v of sortedVariants()) {
     const tr = document.createElement('tr');
-    tr.className = 'clickable';
+    tr.className = 'clickable' + (state.sought && state.sought.variant.key === v.key ? ' sought' : '');
     cell(tr, v.names.c ? v.names.c.split(':')[1] : '—', 'mono');
     cell(tr, v.location || '—');
     const p = cell(tr, v.protein?.short || '—', 'mono');
@@ -395,54 +498,79 @@ $('exportCsv').addEventListener('click', () => {
 // ---------------------------------------------------------------------------
 // 4. Chromatogramme
 
-const view = new TraceView($('trace'), { onSelect: k => describeBase(k), label: k => hoverLabel(k) });
+const view = new TraceView($('trace'), { onSelect: k => describeBase(k), label: col => hoverLabel(col) });
 
-/** Étiquette de survol : position c. (sinon g.) en titre, puis g., base de la lecture et allèles. */
-function hoverLabel(k) {
-  const r = view.result, a = view.annotationMap?.get(k);
-  if (!r || !a?.g) return [`base ${k + 1}`, k < r?.trim[0] || k >= r?.trim[1] ? 'hors de la zone analysée' : 'non alignée sur la référence'];
-  const c = state.ref.mapper ? `c.${state.ref.mapper.c(a.g)}` : null;
+/** Étiquette de survol : position c. (sinon g.) en titre, puis g., base de la lecture, génome et allèles. */
+function hoverLabel(col) {
+  const r = view.result;
+  const cOf = g => (state.ref.mapper ? `c.${state.ref.mapper.c(g)}` : null);
+  if (col.k === null) {
+    const { g, genome } = col.gap;
+    return [cOf(g) || `g.${g}`, [cOf(g) ? `g.${g}` : null, `génome ${genome}`, 'aucun pic en face (base absente de la lecture)'].filter(Boolean).join(' · ')];
+  }
+  const k = col.k, a = view.annotationMap?.get(k);
+  if (!r || !a?.g) return [`base ${k + 1}`, k < r?.trim[0] || k >= r?.trim[1] ? 'hors de la zone analysée' : a?.genome === '-' ? 'base lue absente du génome (insertion)' : 'non alignée sur la référence'];
   const alleles = a.a1 === a.a2 ? `${a.a1}` : `${a.a1}/${a.a2}`;
   // Bases dans le sens de la lecture, comme sous les pics : complémentaires du transcrit sur une Reverse.
   const strand = r.strand === '-' ? ' (brin −)' : '';
-  const gap = a.skipped ? `${a.skipped.length} base(s) de référence (${a.skipped}) sans pic ${a.skippedSide === 'before' ? 'juste avant' : 'juste après'}` : null;
-  const genome = a.genome ? `génome ${a.genome}${a.genome !== a.ref ? ' ≠ réf. JANUS' : ''}` : null;
-  return [c || `g.${a.g}`, [c ? `g.${a.g}` : null, `base ${k + 1}`, genome, `réf. ${a.ref}`, `allèles ${alleles}${strand}`, gap].filter(Boolean).join(' · ')];
+  const cd = view.context?.(a.g)?.codon;
+  const codon = cd ? `codon ${cd.n} (${cd.aa3}, base ${cd.phase + 1}/3)` : null;
+  return [cOf(a.g) || `g.${a.g}`, [cOf(a.g) ? `g.${a.g}` : null, `base ${k + 1}`, `génome ${a.genome}`, `allèles ${alleles}${strand}`, codon].filter(Boolean).join(' · ')];
 }
 
-/** Annotations par base d'origine : référence et allèles, dans le sens de la lecture. */
-function annotationsOf(result) {
-  const map = new Map(), flip = result.strand === '-';
-  const show = b => (flip && b !== '-' ? complement(b) : b);
-  // Bases de référence sans pic en face (gap de l'alignement) : rattachées à la base lue voisine, côté
-  // gap dans le sens de lecture (avant elle en Forward, après elle en Reverse), pour rester visibles.
-  let skipped = '';
-  for (const c of result.cols) {
-    if (c.q === null) { skipped += c.ref; continue; }
-    const index = result.profile[c.q].index;
-    const a = { ref: show(c.ref), a1: show(c.a1), a2: show(c.a2), g: c.t !== null ? result.winStart + c.t + 1 : null, mixed: c.mixed };
-    if (skipped) { a.skipped = flip ? [...skipped].reverse().map(complement).join('') : skipped; a.skippedSide = flip ? 'after' : 'before'; }
-    skipped = '';
-    map.set(index, a);
+/**
+ * Contexte d'une position génomique pour le bandeau du chromatogramme : exon / intron (et, dans un
+ * intron, l'exon le plus proche et son côté à l'écran), codon et acide aminé de référence.
+ */
+function contextFor(result) {
+  const ref = state.ref, m = ref.mapper;
+  if (!m) return null;
+  if (!ref._protein && ref.cds) {
+    const spliced = m.exons.map(([s, e]) => ref.seq.slice(s - 1, e)).join('');
+    ref._protein = translate(spliced.slice(ref.cds.cdsStart - 1));
   }
-  // Zone de doubles pics (±5 bases) : la ligne Génome y suit l'allèle dominant, sans alerte.
-  const keys = [...map.keys()].sort((x, y) => x - y);
-  keys.forEach((k, i) => {
-    const near = keys.slice(Math.max(0, i - 5), i + 6).map(j => map.get(j));
-    map.get(k).mixedZone = near.filter(a => a.mixed).length >= 0.35 * near.length;
-  });
-  // Ligne Génome : alignement direct des bases du séquenceur (contrôle indépendant de JANUS).
-  const ck = result.check;
-  if (ck) {
-    for (let k = 0; k < ck.genome.length; k++) {
-      if (ck.genome[k] === null && !ck.gapBefore[k]) continue;
-      const a = map.get(k) || {};
-      if (ck.genome[k] !== null) a.genome = show(ck.genome[k]);
-      if (ck.gapBefore[k]) { a.genomeGap = flip ? revcomp(ck.gapBefore[k]) : ck.gapBefore[k]; a.genomeGapSide = flip ? 'after' : 'before'; }
-      map.set(k, a);
+  const reverse = result.strand === '-';
+  return g => {
+    const region = m.region(g);
+    let nearest = null;
+    if (region.kind === 'intron') {
+      // c.N+d : exon en amont (positions génomiques plus petites) ; c.N-d : exon en aval.
+      const upstream = /\+\d+$/.test(m.c(g));
+      nearest = { n: upstream ? region.n : region.n + 1, left: upstream !== reverse };
     }
+    let codon = null;
+    const t = m.exonic(g);
+    if (t !== null && ref.cds && ref._protein && t >= ref.cds.cdsStart && t <= ref.cds.cdsEnd) {
+      const i = t - ref.cds.cdsStart, n = Math.floor(i / 3), aa = ref._protein[n] || 'X';
+      codon = { n: n + 1, phase: i % 3, aa, aa3: aa === '*' ? 'Ter' : THREE[aa] || 'Xaa' };
+    }
+    return { region, nearest, codon };
+  };
+}
+
+/**
+ * Annotations d'une lecture, dans le sens de la lecture, à partir de l'alignement de JANUS sur
+ * l'allèle de référence :
+ *  - map : base lue → { genome, a1, a2, g } (génome « - » pour une base lue absente du génome) ;
+ *  - gaps : base lue → bases du génome sans pic, à afficher juste après elle (ligne Génome continue).
+ */
+function annotationsOf(result) {
+  const map = new Map(), gaps = new Map(), flip = result.strand === '-';
+  const show = b => (flip && b !== '-' ? complement(b) : b);
+  let pending = [], prev = null;
+  for (const c of result.cols) {
+    if (c.q === null) { pending.push({ genome: show(c.ref), g: result.winStart + c.t + 1 }); continue; }
+    const k = result.profile[c.q].index;
+    map.set(k, { genome: show(c.ref), a1: show(c.a1), a2: show(c.a2), g: c.t !== null ? result.winStart + c.t + 1 : null, mixed: c.mixed });
+    if (pending.length && prev !== null) {
+      // Forward : entre la base lue précédente et celle-ci. Reverse : la lecture parcourt la référence à
+      // l'envers, les bases sautées viennent après celle-ci, dans l'ordre inverse.
+      if (flip) gaps.set(k, pending.reverse()); else gaps.set(prev, pending);
+    }
+    pending = [];
+    prev = k;
   }
-  return map;
+  return { map, gaps };
 }
 
 /** Bilan du contrôle direct d'une lecture : discordances et alertes non expliquées par les variants retenus. */
@@ -475,10 +603,19 @@ function renderTraceSelect() {
 function showTrace(i, center = null) {
   const r = state.results[i];
   if (!r) return;
+  // Repères : variants appelés sur cette lecture et position du variant recherché.
+  const markers = r.variants.map(v => v.readBase - 1);
+  const soughtAt = state.sought?.reads.find(x => x.result === r)?.center;
+  if (soughtAt !== undefined && soughtAt !== null) markers.push(soughtAt);
   if (view.result !== r) {
     view.result = r;
-    view.annotationMap = annotationsOf(r);
-    view.setRead(r.read, view.annotationMap, r.variants.map(v => v.readBase - 1));
+    const ann = annotationsOf(r);
+    view.annotationMap = ann.map;
+    view.context = contextFor(r);
+    view.setRead(r.read, ann.map, markers, ann.gaps);
+  } else {
+    view.markers = markers;
+    view.draw();
   }
   if (center !== null) {
     view.centerOn(center);
@@ -494,7 +631,7 @@ function describeBase(k) {
   if (a?.g) {
     text += ` · g.${a.g}`;
     if (state.ref.mapper) text += ` · c.${state.ref.mapper.c(a.g)}`;
-    text += ` · réf. ${a.ref} · allèle 1 ${a.a1} · allèle 2 ${a.a2}`;
+    text += ` · génome ${a.genome} · allèle 1 ${a.a1} · allèle 2 ${a.a2}`;
   } else if (k < r.trim[0] || k >= r.trim[1]) {
     text += ' · hors de la zone analysée (extrémité de lecture)';
   }
@@ -575,7 +712,7 @@ function el(tag, props = {}, ...children) {
 
 /** Nouvelle analyse : variants confirmés F/R cochés par défaut, à classer. */
 function resetReport() {
-  report.choices = new Map(state.merged.map(v => [v.key, { checked: v.status === 'confirmé F/R', classId: '' }]));
+  report.choices = new Map(state.merged.map(v => [v.key, { checked: v.status === 'confirmé F/R' || state.sought?.found === v, classId: '' }]));
   report.edited = false;
   report.images = new Map();
   renderReportTable();
@@ -620,7 +757,8 @@ function renderReportTable() {
 
 function updateConclusion(force = false) {
   if (report.edited && !force) return;
-  $('repConclusion').value = state.ref && state.results.length ? conclusion(selectedForReport(), state.ref, state.results) : '';
+  const absent = state.sought && !state.sought.found ? [state.sought.variant] : [];
+  $('repConclusion').value = state.ref && state.results.length ? conclusion(selectedForReport(), state.ref, state.results, absent) : '';
   report.edited = false;
 }
 
@@ -637,18 +775,47 @@ function variantFigures(v) {
       if (!result) return null;
       // Base de la lecture la plus proche de la position du variant sur la référence.
       let center = null, best = Infinity;
-      for (const [k, a] of annotationsOf(result)) if (a.g && Math.abs(a.g - (v.pos + 1)) < best) { best = Math.abs(a.g - (v.pos + 1)); center = k; }
+      for (const [k, a] of annotationsOf(result).map) if (a.g && Math.abs(a.g - (v.pos + 1)) < best) { best = Math.abs(a.g - (v.pos + 1)); center = k; }
       return center === null ? null : { result, center, how: 'confirmé par modélisation' };
     }),
   ].filter(Boolean);
   return sources.map(({ result, center, how }) => {
     const key = `${v.key}|${result.name}`;
-    if (!report.images.has(key)) report.images.set(key, snapshot(result.read, annotationsOf(result), [center], center));
+    if (!report.images.has(key)) {
+      const ann = annotationsOf(result);
+      report.images.set(key, snapshot(result.read, ann.map, [center], center, { gaps: ann.gaps, context: contextFor(result) }));
+    }
     const pos = state.ref.mapper ? `c.${state.ref.mapper.c(v.pos + 1)}` : `g.${v.pos + 1}`;
     return el('figure', {},
       el('img', { src: report.images.get(key), alt: `Chromatogramme ${result.name} autour de ${pos}` }),
-      el('figcaption', {}, `${result.name} (${result.strand === '+' ? 'Forward' : 'Reverse'}, ${how}) — base ${center + 1} surlignée ; lignes : lecture, référence, allèle 1, allèle 2 (sens de lecture).`));
+      el('figcaption', {}, `${result.name} (${result.strand === '+' ? 'Forward' : 'Reverse'}, ${how}) — base ${center + 1} surlignée ; lignes : lecture, génome, allèle 1, allèle 2 (sens de lecture).`));
   });
+}
+
+/**
+ * Rapport : variant recherché. S'il n'est pas retrouvé, capture de chaque lecture informative centrée
+ * sur sa position, avec ce que dit la lecture (absence de signal, ou signal à vérifier).
+ */
+function soughtSection() {
+  const s = state.sought;
+  if (!s || !state.results.length) return [];
+  const v = s.variant;
+  const name = `${v.names.c}${v.protein?.short ? ` ${v.protein.short}` : ''}`;
+  const out = [el('h2', {}, 'Variant recherché'),
+    el('p', {}, el('span', { class: 'mono' }, name), v.location ? ` (${v.location})` : '', ' — ', s.found ? `trouvé (${s.found.status})` : 'non retrouvé')];
+  if (s.found) return out; // ses captures figurent avec les variants retenus
+  for (const x of s.reads) {
+    if (x.center === null) continue;
+    const key = `recherche|${v.key}|${x.result.name}`;
+    if (!report.images.has(key)) {
+      const ann = annotationsOf(x.result);
+      report.images.set(key, snapshot(x.result.read, ann.map, [x.center], x.center, { gaps: ann.gaps, context: contextFor(x.result) }));
+    }
+    out.push(el('figure', {},
+      el('img', { src: report.images.get(key), alt: `Chromatogramme ${x.result.name} à la position ${v.names.c}` }),
+      el('figcaption', {}, `${x.result.name} (${x.result.strand === '+' ? 'Forward' : 'Reverse'}) — position du variant recherché surlignée : ${soughtReadVerdict(s, x)}.`)));
+  }
+  return out;
 }
 
 function renderReportPreview() {
@@ -660,18 +827,6 @@ function renderReportPreview() {
   const ref = state.ref, gene = geneOf(ref);
   const selected = selectedForReport();
   const date = new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' });
-  const usable = state.results.filter(r => r.quality.verdict !== 'illisible');
-
-  const reads = el('table', {},
-    el('thead', {}, el('tr', {}, ['Lecture', 'Brin', 'Lisibilité', 'Contrôle direct', 'Région analysée'].map(t => el('th', {}, t)))),
-    el('tbody', {},
-      state.results.map(r => el('tr', {},
-        el('td', { class: 'mono' }, r.name),
-        el('td', {}, r.strand === '+' ? 'Forward' : 'Reverse'),
-        el('td', {}, QUALITY_TAG[r.quality.verdict][0]),
-        el('td', {}, (() => { const ck = checkSummary(r); return ck ? `${ck.ok ? 'concordant' : 'à vérifier'} — ${ck.lines.join(' · ')}` : '—'; })()),
-        el('td', { class: 'mono' }, regionLabel(r)))),
-      state.failed.map(f => el('tr', {}, el('td', { class: 'mono' }, f.name), el('td', {}, '—'), el('td', {}, 'illisible'), el('td', {}, '—'), el('td', {}, f.reason)))));
 
   const variants = selected.length
     ? selected.map(({ variant: v, classId }) => {
@@ -704,9 +859,7 @@ function renderReportPreview() {
     ].filter(Boolean).join(' · ')),
     el('h2', {}, 'Conclusion'),
     el('p', { class: 'conclusion' }, $('repConclusion').value.trim() || '—'),
-    el('h2', {}, 'Référence et région analysée'),
-    el('p', {}, `Référence génomique ${ref.accession}${ref.transcript ? `, transcrit ${ref.transcript.id}` : ''}${ref.cds?.proteinId ? `, protéine ${ref.cds.proteinId}` : ''}. Région analysée : ${analysedRegion(ref, state.results) || '—'} (${usable.length} lecture(s) exploitable(s)).`),
-    reads,
+    ...soughtSection(),
     el('h2', {}, selected.length > 1 ? 'Variants retenus' : 'Variant retenu'),
     ...variants,
     el('p', { class: 'disclaimer' }, `Analyse réalisée avec ${NAME} ${releaseLabel()} (déconvolution d’allèles de chromatogrammes Sanger, méthode inspirée de Tracy, Rausch et al., BMC Genomics 2020), outil de recherche non validé pour le diagnostic. Les nomenclatures p. sont prédites. Tout variant doit être confirmé visuellement sur le chromatogramme et par une méthode validée ; l’absence de variant détecté n’exclut pas un variant non détectable par cette méthode (mosaïque, grande délétion, allèle non amplifié).`),
