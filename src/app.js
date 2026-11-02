@@ -65,6 +65,7 @@ function describeReference(ref) {
 
 function setReference(ref) {
   state.ref = ref;
+  markQuickGene(String(geneOf(ref) || '').toUpperCase());
   setStatus('refStatus', describeReference(ref));
   if (state.results.length) setStatus('readStatus', 'Référence modifiée : relancez l’analyse.');
 }
@@ -89,7 +90,7 @@ function showLoaded(ref) {
   setReference(ref);
 }
 
-$('loadGene').addEventListener('click', async () => {
+async function loadGeneClick() {
   const gene = $('gene').value.trim();
   if (!gene) return setStatus('refStatus', 'Saisissez un symbole de gène (ex. BRCA2).', true);
   try {
@@ -98,8 +99,29 @@ $('loadGene').addEventListener('click', async () => {
   } catch (e) {
     setStatus('refStatus', `Chargement impossible : ${e.message}. Vous pouvez saisir une accession NG_ précise ou importer un fichier local.`, true);
   }
-});
+}
+$('loadGene').addEventListener('click', loadGeneClick);
 $('gene').addEventListener('keydown', e => { if (e.key === 'Enter') $('loadGene').click(); });
+
+// Accès rapide : un clic sur un gène fréquent le charge directement.
+const QUICK_GENES = ['BRCA1', 'BRCA2', 'PALB2', 'RAD51C', 'RAD51D', 'PTEN', 'CDH1', 'MSH2', 'MSH6', 'MLH1'];
+function markQuickGene(gene) {
+  for (const b of $('geneChips').querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.textContent === gene));
+}
+for (const gene of QUICK_GENES) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.textContent = gene;
+  b.title = `Charger ${gene}`;
+  b.setAttribute('aria-pressed', 'false');
+  b.addEventListener('click', async () => {
+    $('gene').value = gene;
+    const chips = [...$('geneChips').querySelectorAll('button')];
+    chips.forEach(c => { c.disabled = true; });
+    try { await loadGeneClick(); } finally { chips.forEach(c => { c.disabled = false; }); }
+  });
+  $('geneChips').append(b);
+}
 try { const last = localStorage.getItem('janus.gene'); if (last) $('gene').value = last; } catch { /* facultatif */ }
 
 $('loadNg').addEventListener('click', async () => {
