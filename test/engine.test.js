@@ -209,3 +209,30 @@ test('substitution en tête d’une longue série de A + série plus courte en c
   assert.ok(del, 'délétion de 3 A appelée');
   assert.equal(del.status, 'confirmé F/R');
 });
+
+test('séries répétées (A, C, G, T) : substitution en bord de série + indel dans la série, sur le même allèle', () => {
+  // Plusieurs écritures sont équivalentes : on compare l'allèle muté reconstruit au vrai.
+  const other = b => ({ A: 'T', C: 'G', G: 'C', T: 'A' }[b]);
+  let seed = 100;
+  for (const base of 'ACGT') for (const [size, where] of [[-1, 'fin'], [1, 'début'], [-3, 'fin']]) {
+    seed++;
+    const len = 15, s0 = randomSeq(6000, rng(seed));
+    const flank = n => randomSeq(n, rng(seed * 7)).replace(new RegExp(base, 'g'), other(base));
+    const motif = flank(12) + base.repeat(len) + flank(12);
+    const seq = s0.slice(0, 2200) + motif + s0.slice(2200 + motif.length);
+    const ref = buildReference({ accession: 'NG_H.1', seq });
+    const start = 2212, sub = where === 'début' ? start : start + len - 1;
+    const wt = seq.slice(1849, 2650), at = i => i - 1849;
+    let mut = wt.slice(0, at(sub)) + other(base) + wt.slice(at(sub) + 1);
+    const mid = at(start + 7);
+    mut = size < 0 ? mut.slice(0, mid) + mut.slice(mid - size) : mut.slice(0, mid) + base.repeat(size) + mut.slice(mid);
+    const opts = { length: 650, heightVar: 0.4, noise: 12 };
+    const F = simulate([wt.slice(30), mut.slice(30)], [0.5, 0.5], { ...opts, seed });
+    const R = simulate([revcomp(wt).slice(30), revcomp(mut).slice(30)], [0.5, 0.5], { ...opts, seed: seed + 500 });
+    F.name = 'F'; R.name = 'R';
+    const merged = mergeCalls([F, R].map(r => analyzeRead(r, ref)), ref);
+    let hap = wt;
+    for (const m of merged.filter(x => x.status === 'confirmé F/R').sort((a, b) => b.pos - a.pos)) hap = hap.slice(0, at(m.pos)) + m.ins + hap.slice(at(m.pos) + m.del.length);
+    assert.equal(hap, mut, `${base}${len} ${size} ${where} : ${merged.map(m => m.names.g + ' ' + m.status).join(', ')}`);
+  }
+});
