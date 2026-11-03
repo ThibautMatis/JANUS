@@ -139,6 +139,12 @@ export function analyzeRead(read, ref, options = {}) {
 
   const variants = [];
   for (const call of calls.values()) {
+    // Point de rupture visible (sens de lecture) : c'est là qu'on juge un indel, pas à sa position HGVS.
+    // Dans une répétition lue en Reverse, les deux ne coïncident pas (ex. délétion de A en fin de série).
+    if (call.type !== 'snv') {
+      const bp = breakpointColumn(call, model, seqCols, winStart, reverse, ref.seq);
+      call.bpIndex = bp ? seqCols.indexOf(bp) : null;
+    }
     const v = assess(call, seqCols, prof, opt, reverse);
     if (!v) continue;
     // Base de la lecture d'origine (1-based) pour la navigation : point de rupture visible, c'est-à-dire
@@ -474,7 +480,9 @@ function refitIndels(calls, { ref, winStart, seqCols, prof, reverse, opt, model 
   };
   const addCall = v => {
     const key = variantKey(v);
-    const call = { ...v, key, alleles: [2], cols: [], refit: true, qFirst: nearestCol(v.pos), qAfter: nearestCol(v.pos + v.del.length) };
+    // Une substitution doit garder sa colonne (profil de pics) pour être évaluée ensuite.
+    const cols = v.type === 'snv' ? seqCols.filter(c => c.t !== null && c.t + winStart === v.pos) : [];
+    const call = { ...v, key, alleles: [2], cols, refit: true, qFirst: nearestCol(v.pos), qAfter: nearestCol(v.pos + v.del.length) };
     calls.set(key, call);
     return call;
   };
@@ -528,6 +536,21 @@ function refitIndels(calls, { ref, winStart, seqCols, prof, reverse, opt, model 
       tryVars([normalize(seq, v)], cluster.length > 1);
     };
     tryVars([], true); // le groupe peut n'être que du bruit
+    // Un groupe « délétion-insertion » peut réunir une substitution et un indel voisin sur le même allèle
+    // (ex. c.942+3A>T suivi d'une série de A plus courte) : si l'indel est déjà expliqué ailleurs, il
+    // ne doit pas emporter la substitution. On teste donc les substitutions qu'il contient, alignées à
+    // gauche puis à droite.
+    for (const c of cluster) {
+      if (!c.del.length || !c.ins.length) continue;
+      for (const right of [false, true]) {
+        const snvs = [];
+        for (let i = 0; i < Math.min(c.del.length, c.ins.length); i++) {
+          const di = right ? c.del.length - 1 - i : i, ii = right ? c.ins.length - 1 - i : i;
+          if (c.del[di] !== c.ins[ii]) snvs.push(normalize(seq, { pos: c.pos + di, del: c.del[di], ins: c.ins[ii] }));
+        }
+        if (snvs.length && snvs.length <= 3) tryVars(snvs, true);
+      }
+    }
     for (let p = Math.max(A + 1, lo - 8); p <= Math.min(B - 1, hi + 8); p++) {
       if (delta < 0) tryCandidate({ pos: p, del: seq.slice(p, p - delta), ins: '' });
       else if (delta > 0) {
@@ -610,7 +633,12 @@ function assess(call, seqCols, prof, opt, reverse) {
   const span = (a, b) => Math.max(0, Math.min(seqCols.length, b) - Math.max(0, a));
   // « Avant » / « après » dans le sens de lecture : une lecture Reverse parcourt la référence à l'envers.
   const up = [anchor - opt.flank, anchor - 2], down = [call.qAfter + 2, call.qAfter + 2 + opt.flank];
-  const [pre, post] = reverse ? [down, up] : [up, down];
+  let [pre, post] = reverse ? [down, up] : [up, down];
+  const bp = call.bpIndex;
+  if (Number.isInteger(bp) && bp >= 0) {
+    // Fenêtres de part et d'autre du point de rupture visible, dans le sens de lecture.
+    [pre, post] = reverse ? [[bp + 1, bp + 1 + opt.flank], [bp - opt.flank + 1, bp + 1]] : [[bp - opt.flank, bp], [bp, bp + opt.flank]];
+  }
   const before = window(...pre);
   const after = window(...post);
   out.mixedBefore = before;
