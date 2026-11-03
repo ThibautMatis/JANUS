@@ -188,3 +188,51 @@ test('deux délétions en cis (1 nt + 4 nt à 80 nt d’intervalle) : les deux a
   assert.deepEqual(merged.map(m => [m.names.g, m.status]), [
     [`NG_G.1:g.${g1 + 1}del`, 'confirmé F/R'], [`NG_G.1:g.${g2 + 1}_${g2 + 4}del`, 'confirmé F/R']]);
 });
+
+test('substitution en tête d’une longue série de A + série plus courte en cis (type MSH2 c.942+3A>T)', () => {
+  // Fin d'exon …CAG | GT A27 GGG… : A>T sur le premier A, et 3 A en moins sur le même allèle.
+  const motif = 'AACCTTTTTCAGGT' + 'A'.repeat(27) + 'GGGTTAAAAATGTTGA';
+  const seq = (() => { const s = randomSeq(6000, rng(41)); return s.slice(0, 2200) + motif + s.slice(2200 + motif.length); })();
+  const ref = buildReference({ accession: 'NG_A.1', seq });
+  const g = 2200 + 14; // 0-based : premier A de la série
+  const wt = seq.slice(1849, 2650), i = g - 1849;
+  const mut = wt.slice(0, i) + 'T' + wt.slice(i + 1, i + 10) + wt.slice(i + 13);
+  const opts = { length: 650, heightVar: 0.4, noise: 12 };
+  const F = simulate([wt.slice(30), mut.slice(30)], [0.5, 0.5], { ...opts, seed: 1 });
+  const R = simulate([revcomp(wt).slice(30), revcomp(mut).slice(30)], [0.5, 0.5], { ...opts, seed: 10 });
+  F.name = 'F'; R.name = 'R';
+  const merged = mergeCalls([F, R].map(r => analyzeRead(r, ref)), ref);
+  const snv = merged.find(m => m.names.g === `NG_A.1:g.${g + 1}A>T`);
+  assert.ok(snv, JSON.stringify(merged.map(m => m.names.g)));
+  assert.equal(snv.status, 'confirmé F/R');
+  const del = merged.find(m => m.type === 'del' && m.del === 'AAA');
+  assert.ok(del, 'délétion de 3 A appelée');
+  assert.equal(del.status, 'confirmé F/R');
+});
+
+test('séries répétées (A, C, G, T) : substitution en bord de série + indel dans la série, sur le même allèle', () => {
+  // Plusieurs écritures sont équivalentes : on compare l'allèle muté reconstruit au vrai.
+  const other = b => ({ A: 'T', C: 'G', G: 'C', T: 'A' }[b]);
+  let seed = 100;
+  for (const base of 'ACGT') for (const [size, where] of [[-1, 'fin'], [1, 'début'], [-3, 'fin']]) {
+    seed++;
+    const len = 15, s0 = randomSeq(6000, rng(seed));
+    const flank = n => randomSeq(n, rng(seed * 7)).replace(new RegExp(base, 'g'), other(base));
+    const motif = flank(12) + base.repeat(len) + flank(12);
+    const seq = s0.slice(0, 2200) + motif + s0.slice(2200 + motif.length);
+    const ref = buildReference({ accession: 'NG_H.1', seq });
+    const start = 2212, sub = where === 'début' ? start : start + len - 1;
+    const wt = seq.slice(1849, 2650), at = i => i - 1849;
+    let mut = wt.slice(0, at(sub)) + other(base) + wt.slice(at(sub) + 1);
+    const mid = at(start + 7);
+    mut = size < 0 ? mut.slice(0, mid) + mut.slice(mid - size) : mut.slice(0, mid) + base.repeat(size) + mut.slice(mid);
+    const opts = { length: 650, heightVar: 0.4, noise: 12 };
+    const F = simulate([wt.slice(30), mut.slice(30)], [0.5, 0.5], { ...opts, seed });
+    const R = simulate([revcomp(wt).slice(30), revcomp(mut).slice(30)], [0.5, 0.5], { ...opts, seed: seed + 500 });
+    F.name = 'F'; R.name = 'R';
+    const merged = mergeCalls([F, R].map(r => analyzeRead(r, ref)), ref);
+    let hap = wt;
+    for (const m of merged.filter(x => x.status === 'confirmé F/R').sort((a, b) => b.pos - a.pos)) hap = hap.slice(0, at(m.pos)) + m.ins + hap.slice(at(m.pos) + m.del.length);
+    assert.equal(hap, mut, `${base}${len} ${size} ${where} : ${merged.map(m => m.names.g + ' ' + m.status).join(', ')}`);
+  }
+});

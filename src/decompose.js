@@ -139,6 +139,12 @@ export function analyzeRead(read, ref, options = {}) {
 
   const variants = [];
   for (const call of calls.values()) {
+    // Point de rupture visible (sens de lecture) : c'est là qu'on juge un indel, pas à sa position HGVS.
+    // Dans une répétition lue en Reverse, les deux ne coïncident pas (ex. délétion de A en fin de série).
+    if (call.type !== 'snv') {
+      const bp = breakpointColumn(call, model, seqCols, winStart, reverse, ref.seq);
+      call.bpIndex = bp ? seqCols.indexOf(bp) : null;
+    }
     const v = assess(call, seqCols, prof, opt, reverse);
     if (!v) continue;
     // Base de la lecture d'origine (1-based) pour la navigation : point de rupture visible, c'est-à-dire
@@ -174,6 +180,9 @@ export function analyzeRead(read, ref, options = {}) {
     partial: partial ? { ...partial, names: hgvsNames(partial, ref) } : null,
     /** Score d'ajustement de la lecture sous l'hypothèse d'un allèle 2 portant `vars`. */
     explain: vars => model.fit(vars, model.A, model.B),
+    /** Même score, restreint à [lo, hi) de la référence (évaluation locale, plus rapide). */
+    explainAt: (vars, lo, hi) => model.fit(vars, lo, hi),
+    reference: ref,
   };
 }
 
@@ -474,7 +483,9 @@ function refitIndels(calls, { ref, winStart, seqCols, prof, reverse, opt, model 
   };
   const addCall = v => {
     const key = variantKey(v);
-    const call = { ...v, key, alleles: [2], cols: [], refit: true, qFirst: nearestCol(v.pos), qAfter: nearestCol(v.pos + v.del.length) };
+    // Une substitution doit garder sa colonne (profil de pics) pour être évaluée ensuite.
+    const cols = v.type === 'snv' ? seqCols.filter(c => c.t !== null && c.t + winStart === v.pos) : [];
+    const call = { ...v, key, alleles: [2], cols, refit: true, qFirst: nearestCol(v.pos), qAfter: nearestCol(v.pos + v.del.length) };
     calls.set(key, call);
     return call;
   };
@@ -528,6 +539,21 @@ function refitIndels(calls, { ref, winStart, seqCols, prof, reverse, opt, model 
       tryVars([normalize(seq, v)], cluster.length > 1);
     };
     tryVars([], true); // le groupe peut n'être que du bruit
+    // Un groupe « délétion-insertion » peut réunir une substitution et un indel voisin sur le même allèle
+    // (ex. c.942+3A>T suivi d'une série de A plus courte) : si l'indel est déjà expliqué ailleurs, il
+    // ne doit pas emporter la substitution. On teste donc les substitutions qu'il contient, alignées à
+    // gauche puis à droite.
+    for (const c of cluster) {
+      if (!c.del.length || !c.ins.length) continue;
+      for (const right of [false, true]) {
+        const snvs = [];
+        for (let i = 0; i < Math.min(c.del.length, c.ins.length); i++) {
+          const di = right ? c.del.length - 1 - i : i, ii = right ? c.ins.length - 1 - i : i;
+          if (c.del[di] !== c.ins[ii]) snvs.push(normalize(seq, { pos: c.pos + di, del: c.del[di], ins: c.ins[ii] }));
+        }
+        if (snvs.length && snvs.length <= 3) tryVars(snvs, true);
+      }
+    }
     for (let p = Math.max(A + 1, lo - 8); p <= Math.min(B - 1, hi + 8); p++) {
       if (delta < 0) tryCandidate({ pos: p, del: seq.slice(p, p - delta), ins: '' });
       else if (delta > 0) {
@@ -549,6 +575,7 @@ function refitIndels(calls, { ref, winStart, seqCols, prof, reverse, opt, model 
     const gain = fit([...others, c], c.pos - 10, c.pos + 11) - fit(others, c.pos - 10, c.pos + 11);
     if (gain < 1) calls.delete(c.key);
   }
+
   return partial;
 }
 
@@ -610,7 +637,12 @@ function assess(call, seqCols, prof, opt, reverse) {
   const span = (a, b) => Math.max(0, Math.min(seqCols.length, b) - Math.max(0, a));
   // « Avant » / « après » dans le sens de lecture : une lecture Reverse parcourt la référence à l'envers.
   const up = [anchor - opt.flank, anchor - 2], down = [call.qAfter + 2, call.qAfter + 2 + opt.flank];
-  const [pre, post] = reverse ? [down, up] : [up, down];
+  let [pre, post] = reverse ? [down, up] : [up, down];
+  const bp = call.bpIndex;
+  if (Number.isInteger(bp) && bp >= 0) {
+    // Fenêtres de part et d'autre du point de rupture visible, dans le sens de lecture.
+    [pre, post] = reverse ? [[bp + 1, bp + 1 + opt.flank], [bp - opt.flank + 1, bp + 1]] : [[bp - opt.flank, bp], [bp, bp + opt.flank]];
+  }
   const before = window(...pre);
   const after = window(...post);
   out.mixedBefore = before;
@@ -656,7 +688,12 @@ export function modelSupport(r, v, seq) {
   } else if (r.strand === '+' ? r.refEnd < end + 20 : r.refStart > v.pos - 20) {
     return null; // un indel ne se voit qu'en aval, dans le sens de lecture
   }
-  const own = r.variants.filter(x => x.genotype === 'hétérozygote' && (x.pos + x.del.length < v.pos - 3 || x.pos > end + 3));
+  // Modèle de la lecture : ses propres variants hétérozygotes. Pour tester une substitution, on garde
+  // aussi les indels voisins (ex. substitution en tête d'une série de A raccourcie) : sans eux, la
+  // lecture est mal décalée autour de la substitution. On écarte seulement ce qui occupe la même base.
+  const own = r.variants.filter(x => x.genotype === 'hétérozygote' && (v.type === 'snv'
+    ? !(x.pos <= v.pos && v.pos < x.pos + Math.max(1, x.del.length)) && x.key !== v.key
+    : x.pos + x.del.length < v.pos - 3 || x.pos > end + 3));
   if (r.partial && v.type === 'snv') own.push(r.partial); // lecture entièrement décalée : le décalage fait partie du modèle
   const base = r.explain(own);
   const gains = [v, mirrorOf(v, seq)].filter(Boolean).map(x => r.explain([...own, x]) - base);
@@ -679,6 +716,7 @@ export function mergeCalls(results, ref = null) {
       merged.set(v.key, m);
     }
   }
+  ref = ref ?? results[0]?.reference ?? null;
   const seq = ref?.seq ?? results[0]?.refSeq;
 
   // Placements concurrents d'un même indel (même bilan de longueur, à moins de 10 nt) : on garde celui
@@ -727,11 +765,13 @@ export function mergeCalls(results, ref = null) {
     }
   }
 
+  if (ref) resolveRepeatRegions(merged, results, ref);
+
   const out = [];
   for (const m of merged.values()) {
     const missing = [];
     for (const r of results) {
-      if (m.reads.some(x => x.result === r)) continue;
+      if (m.reads.some(x => x.result === r) || m.resolvedBy?.has(r)) continue;
       const gain = seq && r.explain ? modelSupport(r, m, seq) : null;
       if (gain === null) continue;
       const strong = m.type === 'snv' ? 2 : 20;
@@ -747,4 +787,106 @@ export function mergeCalls(results, ref = null) {
     });
   }
   return out.sort((a, b) => a.pos - b.pos);
+}
+
+/**
+ * Indels dans une répétition (série d'une même base) : résolution conjointe guidée par la référence.
+ * Dans une série, une substitution voisine et l'indel peuvent s'écrire de plusieurs façons, et chaque
+ * lecture peut en retenir une différente (ou perdre la substitution). La référence donne les bornes de
+ * la série ; on énumère les allèles mutés possibles — l'indel seul, l'indel + une substitution sur la
+ * série ou ses bords, une insertion d'une autre base aux bords — et l'on garde celui qui explique le
+ * mieux toutes les lectures ensemble. Les écritures donnant la même séquence ne sont testées qu'une fois
+ * (la première rencontrée, indel au plus 3′, suit la convention HGVS).
+ */
+function resolveRepeatRegions(merged, results, ref) {
+  const seq = ref.seq;
+  const usable = results.filter(r => r.explainAt && r.quality?.verdict !== 'illisible');
+  const done = new Set();
+  const net = v => v.ins.length - v.del.length;
+  for (const seed of [...merged.values()].filter(m => m.type !== 'snv' && m.genotype !== 'homozygote')) {
+    if (!merged.has(seed.key) || done.has(seed.key)) continue;
+    const d = net(seed);
+    if (!d || Math.abs(d) > 10) continue;
+    // Série de la base concernée autour de chaque indel (au moins ±3 nt de contexte) ; la zone réunit
+    // les séries voisines portant un appel (ex. substitution à la jonction d'une série de G et de C).
+    const runOf = v => {
+      const b = (v.del || v.ins)[0];
+      let l = v.pos, r = v.pos + v.del.length;
+      while (l > 0 && seq[l - 1] === b) l--;
+      while (r < seq.length && seq[r] === b) r++;
+      return [l, r];
+    };
+    let [left, right] = runOf(seed);
+    if (right - left < 3) continue; // pas de répétition : rien d'ambigu
+    for (const m of merged.values()) {
+      if (m === seed || m.pos < left - 30 || m.pos > right + 30) continue;
+      const [l, r] = m.type === 'snv' ? [m.pos, m.pos + 1] : runOf(m);
+      left = Math.min(left, l); right = Math.max(right, r);
+    }
+    const base = (seed.del || seed.ins)[0];
+    const lo = left - 3, hi = right + 3, L = lo - 60, H = hi + 60, A = lo - 40, B = hi + 40;
+    const inRegion = m => m.pos + Math.max(1, m.del.length) > lo && m.pos < hi;
+    const region = [...merged.values()].filter(inRegion);
+    const covering = usable.filter(r => r.refStart <= lo && r.refEnd >= hi);
+    if (!covering.length) continue;
+    const own = r => r.variants.filter(x => x.genotype === 'hétérozygote' && !inRegion(x));
+    const score = vars => covering.reduce((sum, r) => sum + r.explainAt([...own(r), ...vars], L, H), 0);
+    const hapOf = vars => { try { return applyVariants(seq, vars, A, B); } catch { return null; } };
+
+    const seen = new Set();
+    let best = null;
+    const consider = vars => {
+      const hap = hapOf(vars);
+      if (hap === null || seen.has(hap)) return;
+      seen.add(hap);
+      const sc = score(vars);
+      if (!best || sc > best.score) best = { vars, score: sc };
+    };
+    const indelAt = p => (d < 0 ? { pos: p, del: seq.slice(p, p - d), ins: '' } : { pos: p, del: '', ins: seq.slice(p - d, p) });
+    const sorted = vars => vars.sort((x, y) => x.pos - y.pos);
+    // Indel au plus 3′ d'abord : parmi des écritures équivalentes, c'est la convention HGVS.
+    for (let p = right - Math.max(0, -d); p >= left; p--) {
+      const ind = indelAt(p);
+      consider([ind]);
+      for (let q = lo; q < hi; q++) {
+        if (ind.del.length && q >= p && q < p + ind.del.length) continue;
+        for (const b of DNA) if (b !== seq[q]) consider(sorted([ind, { pos: q, del: seq[q], ins: b }]));
+      }
+    }
+    // Insertion d'une autre base (ou de plusieurs) aux bords de la série.
+    if (d > 0) for (let p = left; p <= right; p++) if (p === left || p === right || seq[p] !== seq[p - 1]) for (const b of DNA) if (b !== base) consider([{ pos: p, del: '', ins: b.repeat(d) }]);
+    if (!best) continue;
+
+    // Remplacement des appels de la zone par l'allèle retenu, si celui-ci explique au moins aussi bien.
+    const reads = region.flatMap(m => m.reads);
+    const template = region.find(m => m.type !== 'snv') || seed;
+    for (const m of region) { merged.delete(m.key); done.add(m.key); }
+    for (const raw of best.vars) {
+      const v = normalize(seq, raw);
+      const key = variantKey(v);
+      done.add(key);
+      const entry = {
+        ...template, ...v, key, names: hgvsNames(v, ref), genotype: 'hétérozygote',
+        reads: [], strands: new Set(), supportedBy: [], resolvedBy: new Set(),
+        evidence: template.evidence, flags: [],
+      };
+      // Lectures : celles qui avaient appelé un événement de la zone, et celles que l'allèle retenu
+      // explique nettement mieux que l'absence de variant.
+      for (const r of covering) {
+        const gain = r.explainAt([...own(r), ...best.vars], L, H) - r.explainAt(own(r), L, H);
+        const called = reads.find(x => x.result === r);
+        if (called) {
+          entry.reads.push({ ...called, flags: [...(called.flags || []), 'zone répétée : résolu avec les deux lectures'], readBase: called.readBase });
+          entry.strands.add(r.strand);
+          entry.resolvedBy.add(r);
+        } else if (gain >= (v.type === 'snv' ? 2 : 20)) {
+          entry.supportedBy.push({ name: r.name, strand: r.strand, gain });
+          entry.strands.add(r.strand);
+          entry.resolvedBy.add(r);
+        }
+      }
+      if (!entry.reads.length && !entry.supportedBy.length) continue;
+      merged.set(key, entry);
+    }
+  }
 }
