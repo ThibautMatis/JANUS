@@ -17,7 +17,7 @@
           <source srcset="img/janus-logo-dark.png" media="(prefers-color-scheme: dark)">
           <img src="img/janus-logo.png" alt="JANUS — Sanger deconvolution &amp; variant calling" width="590" height="160">
         </picture>
-        <small id="release">v0.8.5 · 2 novembre 2026</small>
+        <small id="release">v0.8.6 · 2 novembre 2026</small>
       </h1>
       <p>Appel de SNV et d’indels hétérozygotes sur chromatogrammes .ab1, sur référence génomique RefSeqGene. Les fichiers restent dans votre navigateur.</p>
     </div>
@@ -27,6 +27,9 @@
     <section class="card" id="step-ref">
       <h2><span class="num">1</span> Référence génomique</h2>
       <p class="note">Les lectures Sanger sur ADN génomique couvrent exons et introns : l’analyse se fait sur l’enregistrement RefSeqGene (NG_) du gène, et le transcrit NM_ sert aux coordonnées c.</p>
+      <div class="gene-chips" id="geneChips" role="group" aria-label="Accès rapide aux gènes">
+        <span class="note">Accès rapide :</span>
+      </div>
       <div class="controls">
         <label>Gène <input id="gene" value="BRCA2" placeholder="BRCA2, TP53…" autocomplete="off" spellcheck="false"></label>
         <button id="loadGene" type="button" class="primary">Charger</button>
@@ -136,6 +139,6 @@
     <p class="warning">⚠ Outil de recherche, non validé pour le diagnostic. Tout variant doit être confirmé visuellement sur le chromatogramme et par une méthode validée. L’absence d’appel n’exclut pas un variant (allèle minoritaire &lt; 20–25 %, extrémités de lecture, régions répétées, indels hétérozygotes composites).</p>
   </main>
   <footer>JANUS — <i>Joint Allele aNalysis Using Sanger</i> · JavaScript local, sans dépendance · seules des requêtes de références publiques sont envoyées à NCBI.</footer>
-  <script type="module" src="src/app.js?v=0.8.5"></script>
+  <script type="module" src="src/app.js?v=0.8.6"></script>
 </body>
 </html>
