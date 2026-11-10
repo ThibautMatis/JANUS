@@ -4,9 +4,7 @@
 
 **v0.8.9 · 10 novembre 2026**
 
-Outil web d’appel de variants sur chromatogrammes Sanger (`.ab1`) : il sépare les deux allèles d’un échantillon hétérozygote, nomme les SNV et les indels (y compris les grands indels) en HGVS `c.`, `p.` et `g.`, et produit un rapport imprimable.
-
-Tout se passe dans le navigateur : les chromatogrammes ne sont jamais envoyés à un serveur.
+Outil web d’appel de variants sur chromatogrammes Sanger (`.ab1`) dérivé de Tracy (Raush T et al. *BMC Genomics*. 2020;21:230. doi:10.1186/s12864-020-6635-8)
 
 **Accès :** https://thibautmatis.github.io/JANUS/
 
