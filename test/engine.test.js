@@ -236,3 +236,29 @@ test('séries répétées (A, C, G, T) : substitution en bord de série + indel 
     assert.equal(hap, mut, `${base}${len} ${size} ${where} : ${merged.map(m => m.names.g + ' ' + m.status).join(', ')}`);
   }
 });
+
+test('délétion-insertion dont la fin ressemble à la suite (type BRCA1 c.1885_1893delinsTCT) : une seule delins', () => {
+  // Contexte réel de BRCA1 (exon 11, Val627 à Pro634) : AGAAATCTA remplacé par TCT.
+  const ctx = 'GTCAGTAGAAATCTAAGCCCACCT';
+  const s0 = randomSeq(6000, rng(31));
+  const seq = s0.slice(0, 2290) + ctx + s0.slice(2290 + ctx.length);
+  const ref = buildReference({ accession: 'NG_D.1', seq });
+  const p = 2290 + 6; // 0-based : début de AGAAATCTA
+  const wt = seq.slice(1849, 2650), at = i => i - 1849;
+  const mut = wt.slice(0, at(p)) + 'TCT' + wt.slice(at(p) + 9);
+  for (const [fraction, seed] of [[0.5, 1], [0.5, 2], [0.4, 3]]) {
+    const F = simulate([wt.slice(30), mut.slice(30)], [1 - fraction, fraction], { length: 650, seed });
+    const R = simulate([revcomp(wt).slice(30), revcomp(mut).slice(30)], [1 - fraction, fraction], { length: 650, seed: seed + 50 });
+    F.name = 'F'; R.name = 'R';
+    const merged = mergeCalls([F, R].map(r => analyzeRead(r, ref)), ref);
+    assert.deepEqual(merged.map(m => `${m.names.g.split(':')[1]} ${m.status}`), [`g.${p + 1}_${p + 9}delinsTCT confirmé F/R`]);
+  }
+});
+
+test('deux substitutions contiguës sur le même allèle : décrites par une délétion-insertion (HGVS)', () => {
+  const g = stablePos(2350);
+  const a = SEQ[g - 1], b = SEQ[g];
+  const x = a === 'A' ? 'C' : 'A', y = b === 'G' ? 'T' : 'G';
+  const { merged } = run([{ g, del: 1, ins: x }, { g: g + 1, del: 1, ins: y }]);
+  assert.deepEqual(merged.map(m => m.names.c.split(':')[1]), [`c.${cOf(g)}_${cOf(g + 1)}delins${x}${y}`]);
+});
