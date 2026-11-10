@@ -803,6 +803,16 @@ function directionBadge(result) {
       : 'brin complémentaire : bases complémentaires du gène, qui va de droite à gauche'));
 }
 
+/**
+ * Bases de la référence génomique concernées par un variant normalisé (1-based, bornes incluses) :
+ * bases supprimées ou substituées, bases dupliquées, ou les deux bases qui encadrent une insertion.
+ */
+function alteredSpan(v) {
+  if (v.del.length) return { from: v.pos + 1, to: v.pos + v.del.length };
+  if (v.type === 'dup') return { from: v.pos - v.ins.length + 1, to: v.pos };
+  return { from: v.pos, to: v.pos + 1 };
+}
+
 /** Capture centrée sur le variant pour chaque lecture qui le soutient (appel direct ou modélisation). */
 function variantFigures(v) {
   const sources = [
@@ -820,13 +830,13 @@ function variantFigures(v) {
     const key = `${v.key}|${result.name}`;
     if (!report.images.has(key)) {
       const ann = annotationsOf(result);
-      report.images.set(key, snapshot(result.read, ann.map, [center], center, { gaps: ann.gaps, context: contextFor(result) }));
+      report.images.set(key, snapshot(result.read, ann.map, [center], center, { gaps: ann.gaps, context: contextFor(result), box: alteredSpan(v) }));
     }
     const pos = state.ref.mapper ? `c.${state.ref.mapper.c(v.pos + 1)}` : `g.${v.pos + 1}`;
     return el('figure', {},
       directionBadge(result),
       el('img', { src: report.images.get(key), alt: `Chromatogramme ${result.name} autour de ${pos}` }),
-      el('figcaption', {}, `${result.name} (${result.strand === '+' ? 'Forward' : 'Reverse'}, ${how}) — base ${center + 1} surlignée ; lignes : lecture, génome, allèle 1, allèle 2 (sens de lecture).`));
+      el('figcaption', {}, `${result.name} (${result.strand === '+' ? 'Forward' : 'Reverse'}, ${how}) — base ${center + 1} surlignée, bases de référence concernées encadrées en rouge ; lignes : lecture, génome, allèle 1, allèle 2 (sens de lecture).`));
   });
 }
 
@@ -847,12 +857,12 @@ function soughtSection() {
     const key = `recherche|${v.key}|${x.result.name}`;
     if (!report.images.has(key)) {
       const ann = annotationsOf(x.result);
-      report.images.set(key, snapshot(x.result.read, ann.map, [x.center], x.center, { gaps: ann.gaps, context: contextFor(x.result) }));
+      report.images.set(key, snapshot(x.result.read, ann.map, [x.center], x.center, { gaps: ann.gaps, context: contextFor(x.result), box: alteredSpan(v) }));
     }
     out.push(el('figure', {},
       directionBadge(x.result),
       el('img', { src: report.images.get(key), alt: `Chromatogramme ${x.result.name} à la position ${v.names.c}` }),
-      el('figcaption', {}, `${x.result.name} (${x.result.strand === '+' ? 'Forward' : 'Reverse'}) — position du variant recherché surlignée : ${soughtReadVerdict(s, x)}.`)));
+      el('figcaption', {}, `${x.result.name} (${x.result.strand === '+' ? 'Forward' : 'Reverse'}) — position du variant recherché surlignée, bases de référence concernées encadrées en rouge : ${soughtReadVerdict(s, x)}.`)));
   }
   return out;
 }

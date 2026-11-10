@@ -201,6 +201,7 @@ export class TraceView {
         ctx.fillText(String(col.k + 1), x, H - 10);
       }
     }
+    if (this.box && rows && showLetters) this.drawBox(ctx, layout, perCol, yBase + labelH, rowH);
     ctx.textAlign = 'left';
     ctx.font = '11px system-ui, sans-serif';
     ctx.fillStyle = muted;
@@ -208,6 +209,33 @@ export class TraceView {
     if (rows) ['Génome', 'Allèle 1', 'Allèle 2'].forEach((t, r) => ctx.fillText(t, 4, yBase + labelH + r * rowH));
 
     if (this.hover !== null && layout[this.hover]) this.drawHover(ctx, layout[this.hover], W, H, css, accent);
+  }
+
+  /**
+   * Cadre rouge autour des bases de la ligne Génome concernées par le variant (positions génomiques
+   * 1-based `box.from`..`box.to`). Les colonnes sans base du génome (base lue en plus) comprises entre
+   * deux bases encadrées restent dans le même cadre.
+   */
+  drawBox(ctx, layout, perCol, y, rowH) {
+    const { from, to } = this.box;
+    const hits = [];
+    layout.forEach((col, i) => { const g = this.columnG(col); if (g !== null && g >= from && g <= to) hits.push(i); });
+    if (!hits.length) return;
+    const groups = [[hits[0], hits[0]]];
+    for (const i of hits.slice(1)) {
+      const last = groups.at(-1);
+      let bridge = true;
+      for (let j = last[1] + 1; j < i; j++) if (this.columnG(layout[j]) !== null) bridge = false;
+      if (bridge) last[1] = i; else groups.push([i, i]);
+    }
+    ctx.save();
+    ctx.strokeStyle = '#d0241b';
+    ctx.lineWidth = 2;
+    for (const [a, b] of groups) {
+      const x0 = layout[a].x - perCol / 2 + 1, x1 = layout[b].x + perCol / 2 - 1;
+      ctx.strokeRect(x0, y - rowH / 2, x1 - x0, rowH);
+    }
+    ctx.restore();
   }
 
   /** Position génomique d'une colonne (base lue alignée ou base du génome insérée), ou null. */
@@ -369,13 +397,13 @@ export class TraceView {
  * Image PNG (data URL) d'un chromatogramme centré sur la base `center`, en couleurs claires,
  * pour le rapport imprimable.
  */
-export function snapshot(read, annotations, markers, center, { width = 1000, height = 330, count = 41, gaps = new Map(), context = null } = {}) {
+export function snapshot(read, annotations, markers, center, { width = 1000, height = 330, count = 41, gaps = new Map(), context = null, box = null } = {}) {
   const canvas = document.createElement('canvas');
   const view = Object.create(TraceView.prototype);
   const n = read.bases.length;
   count = Math.min(n, count);
   Object.assign(view, {
-    canvas, read, annotations, markers, gaps, context, width, height, dpr: 2, hover: null, label: null,
+    canvas, read, annotations, markers, gaps, context, box, width, height, dpr: 2, hover: null, label: null,
     count, start: Math.max(0, Math.min(n - count, Math.round(center - count / 2))),
   });
   view.draw();
