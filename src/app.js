@@ -857,6 +857,21 @@ function soughtSection() {
   return out;
 }
 
+/** Texte où chaque occurrence du symbole du gène est mise en italique (convention de nomenclature). */
+function italicGene(text, gene) {
+  if (!gene) return [text];
+  const re = new RegExp(`(?<![A-Za-z0-9])${gene.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')}(?![A-Za-z0-9])`, 'g');
+  const out = [];
+  let last = 0;
+  for (const m of text.matchAll(re)) {
+    if (m.index > last) out.push(text.slice(last, m.index));
+    out.push(el('i', { class: 'gene' }, m[0]));
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+
 function renderReportPreview() {
   const view = $('reportView');
   const ready = Boolean(state.ref && state.results.length);
@@ -890,14 +905,14 @@ function renderReportPreview() {
 
   view.replaceChildren(
     el('img', { class: 'report-logo', src: 'img/janus-logo.png', alt: 'JANUS' }),
-    el('h1', {}, `Analyse par séquençage Sanger — gène ${gene}`),
+    el('h1', {}, 'Analyse par séquençage Sanger — gène ', el('i', { class: 'gene' }, gene)),
     el('p', { class: 'meta' }, [
       $('repSample').value.trim() ? `Échantillon : ${$('repSample').value.trim()}` : null,
       `Date : ${date}`,
       $('repAuthor').value.trim() ? `Analyse : ${$('repAuthor').value.trim()}` : null,
     ].filter(Boolean).join(' · ')),
     el('h2', {}, 'Conclusion'),
-    el('p', { class: 'conclusion' }, $('repConclusion').value.trim() || '—'),
+    el('p', { class: 'conclusion' }, italicGene($('repConclusion').value.trim() || '—', gene)),
     ...soughtSection(),
     el('h2', {}, selected.length > 1 ? 'Variants retenus' : 'Variant retenu'),
     ...variants,
