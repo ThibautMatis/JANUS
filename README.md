@@ -1,31 +1,29 @@
 <img src="img/janus-logo.png" alt="JANUS — Sanger deconvolution & variant calling" height="90">
 
-**Français** · [English](README.en.md)
-
 # JANUS — *Joint Allele aNalysis Using Sanger*
 
-**v0.8.9 · 10 novembre 2026**
+**v0.8.9 · 10 November 2026**
 
-Outil web d’appel de variants sur chromatogrammes Sanger (`.ab1`) dérivé de Tracy (Rausch T et al. *BMC Genomics*. 2020;21:230. doi:10.1186/s12864-020-6635-8)
+Web tool for variant calling on Sanger chromatograms (`.ab1`), inspired by Tracy (Rausch T et al. *BMC Genomics*. 2020;21:230. doi:10.1186/s12864-020-6635-8).
 
-**Accès :** https://thibautmatis.github.io/JANUS/
+**Access:** https://thibautmatis.github.io/JANUS/
 
-> ⚠ Outil de recherche, non validé pour le diagnostic. Tout variant doit être confirmé sur le chromatogramme et par une méthode validée.
+> ⚠ Research tool, not validated for diagnostic use. Every variant must be confirmed on the chromatogram and by a validated method.
 
-## Utilisation
+## Usage
 
-1. **Référence** : cliquer sur un gène de l’accès rapide (BRCA1, BRCA2, PALB2, RAD51C, RAD51D, PTEN, CDH1, MSH2, MSH6, MLH1), ou taper le gène puis cliquer sur « Charger ». Le RefSeqGene (NG_) et le transcrit de référence sont choisis automatiquement, et la référence reste mémorisée dans le navigateur.
-2. **Chromatogrammes** : importer les `.ab1` Forward et Reverse, taper si besoin le **variant recherché** en c. (ex. `c.1813dup`), puis cliquer sur « Analyser ». Le variant recherché est signalé trouvé ou non retrouvé, lecture par lecture ; s’il est absent, le chromatogramme se place sur sa position, et le rapport conclut « Absence du variant … recherché » avec la capture correspondante. La lisibilité de chaque lecture est indiquée, ainsi qu’un **contrôle sur la séquence de référence** (colonne « Contrôle Séq. Réf. ») : les bases appelées par le séquenceur sont alignées sur le génome, indépendamment de JANUS, et toute discordance non expliquée par les variants retenus est signalée.
-3. **Variants** : nomenclatures `c.`, `p.` et `g.`, exon ou intron (numérotation usuelle pour BRCA1 : pas d’exon 4), génotype, fraction allélique, confirmation F/R. Le tableau se trie par colonne, et le bouton « Fréquences gnomAD » interroge gnomAD v4.
-4. **Chromatogramme** : cliquer sur un variant pour centrer la vue dessus. Au survol, la position `c.` de chaque base s’affiche. Sous les pics, la ligne **Génome** donne la séquence de référence placée par le contrôle direct (en rouge si elle diffère de la référence projetée par JANUS sur un pic simple).
-5. **Rapport** : choisir les variants, les classer (classes 1 à 5), vérifier la conclusion, puis cliquer sur « Imprimer / PDF ».
+1. **Reference**: click a gene in the quick-access bar (BRCA1, BRCA2, PALB2, RAD51C, RAD51D, PTEN, CDH1, MSH2, MSH6, MLH1), or type the gene symbol and click « Charger » (Load). The RefSeqGene (NG_) and the reference transcript are selected automatically, and the reference is cached in the browser.
+2. **Chromatograms**: import the Forward and Reverse `.ab1` files, optionally type the **targeted variant** in c. notation (e.g. `c.1813dup`), then click « Analyser » (Analyse). The targeted variant is reported as found or not found, read by read; if it is absent, the chromatogram is centred on its position and the report concludes « Absence du variant … recherché » (absence of the targeted variant), with the corresponding capture. The readability of each read is shown, together with a **reference sequence check** (« Contrôle Séq. Réf. » column): the bases called by the sequencer are aligned to the genome independently of JANUS, and any discrepancy not explained by the retained variants is flagged.
+3. **Variants**: `c.`, `p.` and `g.` nomenclature, exon or intron (conventional numbering for BRCA1: no exon 4), genotype, allele fraction, F/R confirmation. The table can be sorted by any column, and the « Fréquences gnomAD » (gnomAD frequencies) button queries gnomAD v4.
+4. **Chromatogram**: click a variant to centre the view on it. Hovering over a base shows its `c.` position. Below the peaks, the **Génome** (Genome) row shows the reference sequence placed by the direct check (in red where it differs from the reference projected by JANUS on a single peak).
+5. **Report**: select the variants, classify them (classes 1 to 5), check the conclusion, then click « Imprimer / PDF » (Print / PDF).
 
-Un jeu de démonstration fictif est fourni dans `demo/` (référence `NG_DEMO.gb`, à charger via « Sans connexion à NCBI », et deux lectures portant `c.752dup`).
+A fictitious demonstration dataset is provided in `demo/` (reference `NG_DEMO.gb`, to be loaded via « Sans connexion à NCBI » (without NCBI connection), and two reads carrying `c.752dup`).
 
-En local : `python3 -m http.server`, puis ouvrir http://localhost:8000.
+Running locally: `python3 -m http.server`, then open http://localhost:8000.
 
-## Références
+## References
 
-- Méthode de déconvolution inspirée de Tracy : Rausch T, Fritz MH-Y, Untergasser A, Benes V. *BMC Genomics*. 2020;21:230. doi:10.1186/s12864-020-6635-8
-- Classification : Richards S et al. *Genet Med*. 2015;17:405-424 (ACMG/AMP).
-- Nomenclature : den Dunnen JT et al. *Hum Mutat*. 2016;37:564-569 (HGVS).
+- Deconvolution method inspired by Tracy: Rausch T, Fritz MH-Y, Untergasser A, Benes V. *BMC Genomics*. 2020;21:230. doi:10.1186/s12864-020-6635-8
+- Classification: Richards S et al. *Genet Med*. 2015;17:405-424 (ACMG/AMP).
+- Nomenclature: den Dunnen JT et al. *Hum Mutat*. 2016;37:564-569 (HGVS).
