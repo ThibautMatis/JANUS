@@ -797,10 +797,7 @@ function directionBadge(result) {
   const forward = result.strand === '+';
   return el('div', { class: `direction ${forward ? 'forward' : 'reverse'}` },
     el('span', { class: 'badge' }, forward ? 'FORWARD' : 'REVERSE'),
-    el('span', { class: 'arrow', 'aria-hidden': 'true' }, forward ? '5′ ━━━━━━━━━▶ 3′' : '3′ ◀━━━━━━━━━ 5′'),
-    el('span', { class: 'text' }, forward
-      ? 'lu dans le sens du gène (de gauche à droite)'
-      : 'brin complémentaire : bases complémentaires du gène, qui va de droite à gauche'));
+    el('span', { class: 'arrow', 'aria-hidden': 'true' }, forward ? '5′ ━━━━━━━━━▶ 3′' : '3′ ◀━━━━━━━━━ 5′'));
 }
 
 /**
