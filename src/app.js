@@ -789,6 +789,20 @@ $('repConclusion').addEventListener('input', () => { report.edited = true; rende
 $('repRegenerate').addEventListener('click', () => { updateConclusion(true); renderReportPreview(); });
 for (const id of ['repSample', 'repAuthor']) $(id).addEventListener('input', () => renderReportPreview());
 
+/**
+ * Bandeau au-dessus d'une capture du rapport : sens de la lecture par rapport au gène. Une lecture
+ * Reverse est affichée dans son propre sens : bases complémentaires, gène orienté de droite à gauche.
+ */
+function directionBadge(result) {
+  const forward = result.strand === '+';
+  return el('div', { class: `direction ${forward ? 'forward' : 'reverse'}` },
+    el('span', { class: 'badge' }, forward ? 'FORWARD' : 'REVERSE'),
+    el('span', { class: 'arrow', 'aria-hidden': 'true' }, forward ? '5′ ━━━━━━━━━▶ 3′' : '3′ ◀━━━━━━━━━ 5′'),
+    el('span', { class: 'text' }, forward
+      ? 'lu dans le sens du gène (de gauche à droite)'
+      : 'brin complémentaire : bases complémentaires du gène, qui va de droite à gauche'));
+}
+
 /** Capture centrée sur le variant pour chaque lecture qui le soutient (appel direct ou modélisation). */
 function variantFigures(v) {
   const sources = [
@@ -810,6 +824,7 @@ function variantFigures(v) {
     }
     const pos = state.ref.mapper ? `c.${state.ref.mapper.c(v.pos + 1)}` : `g.${v.pos + 1}`;
     return el('figure', {},
+      directionBadge(result),
       el('img', { src: report.images.get(key), alt: `Chromatogramme ${result.name} autour de ${pos}` }),
       el('figcaption', {}, `${result.name} (${result.strand === '+' ? 'Forward' : 'Reverse'}, ${how}) — base ${center + 1} surlignée ; lignes : lecture, génome, allèle 1, allèle 2 (sens de lecture).`));
   });
@@ -835,6 +850,7 @@ function soughtSection() {
       report.images.set(key, snapshot(x.result.read, ann.map, [x.center], x.center, { gaps: ann.gaps, context: contextFor(x.result) }));
     }
     out.push(el('figure', {},
+      directionBadge(x.result),
       el('img', { src: report.images.get(key), alt: `Chromatogramme ${x.result.name} à la position ${v.names.c}` }),
       el('figcaption', {}, `${x.result.name} (${x.result.strand === '+' ? 'Forward' : 'Reverse'}) — position du variant recherché surlignée : ${soughtReadVerdict(s, x)}.`)));
   }
