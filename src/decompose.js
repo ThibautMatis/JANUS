@@ -33,6 +33,7 @@ export const DEFAULTS = {
   maxInsertion: 40,   // taille maximale des insertions recherchées (nt)
   scanMinGain: 20,    // gain d'ajustement minimal pour retenir un indel trouvé par recherche du décalage
   scanMinConcordance: 0.6, // part des pics mixtes expliqués par la séquence décalée
+  delinsMinGain: 2,   // gain d'ajustement minimal d'une délétion-insertion sur l'indel simple de même bilan
 };
 
 const h = (x, base) => x.h[DNA.indexOf(base)] ?? 0;
@@ -469,10 +470,13 @@ function refitIndels(calls, { ref, winStart, seqCols, prof, reverse, opt, model 
   };
   const seq = ref.seq;
   // Bases d'une insertion non dupliquée de longueur L en p, lues dans le signal.
-  const inferInsert = (p, L) => {
+  const inferInsert = (p, L) => inferBases(p, L, L);
+  // Bases de l'allèle 2 lues dans le signal pour k bases insérées en p, le bilan de longueur de
+  // l'événement étant delta (une lecture Reverse aligne la fin de l'allèle 2 sur celle de la référence).
+  const inferBases = (p, L, delta) => {
     let s = '';
     for (let i = 0; i < L; i++) {
-      const col = colOf.get(reverse ? p + i - L : p + i);
+      const col = colOf.get(reverse ? p + i - delta : p + i);
       if (col === undefined) return null;
       const x = prof[seqCols[col].q], a1 = seqCols[col].a1, top = Math.max(...x.h);
       let best = a1;
@@ -490,11 +494,49 @@ function refitIndels(calls, { ref, winStart, seqCols, prof, reverse, opt, model 
     return call;
   };
 
+  /**
+   * Meilleure délétion-insertion de bilan `delta` autour de [lo, hi) : k bases (1 à 4) lues dans le
+   * signal de l'allèle 2 remplacent k − delta bases de la référence. Ex. BRCA1 c.1885_1893delinsTCT
+   * (9 nt remplacés par 3), qui ressemble à une délétion de 6 nt suivie d'une substitution, mais dont
+   * seules les bases TCT expliquent l'allèle 2.
+   */
+  const delinsSearch = (lo, hi, delta, others, from, to) => {
+    let best = null;
+    for (let p = Math.max(A + 1, lo - 8); p <= Math.min(B - 1, hi + 8); p++) {
+      for (let k = 1; k <= 4; k++) {
+        const d = k - delta; // bases supprimées
+        if (d < 1 || p + d > B) continue;
+        const ins = inferBases(p, k, delta);
+        if (!ins || ins.includes('N')) continue;
+        const v = normalize(seq, { pos: p, del: seq.slice(p, p + d), ins });
+        if (v.type !== 'delins') continue;
+        const score = fit([...others, v], from, to);
+        if (!best || score > best.score) best = { v, score };
+      }
+    }
+    return best;
+  };
+
   const kept = [];
   let partial = null;
   const scan = scanShift({ ref, winStart, seqCols, prof, reverse, opt, model, inferInsert });
   if (scan) {
-    const v = scan.variant;
+    let v = scan.variant;
+    // L'indel trouvé peut n'être que l'approximation d'une délétion-insertion de même bilan : on la
+    // retient si elle explique nettement mieux le signal.
+    if (!scan.partial) {
+      const from = v.pos - 60, to = v.pos + v.del.length + 60;
+      const lo = v.pos, hi = v.pos + v.del.length, delta = v.ins.length - v.del.length;
+      // Référence : le meilleur indel simple de même bilan dans la zone (l'indel trouvé ou un autre placement).
+      let simple = fit([v], from, to);
+      for (let p = Math.max(A + 1, lo - 8); p <= Math.min(B - 1, hi + 8); p++) {
+        const cands = delta < 0 ? [{ pos: p, del: seq.slice(p, p - delta), ins: '' }]
+          : [{ pos: p, del: '', ins: seq.slice(p - delta, p) }, { pos: p, del: '', ins: inferInsert(p, delta) }];
+        for (const c of cands) if (c.ins !== null && !c.ins.includes('N')) simple = Math.max(simple, fit([normalize(seq, c)], from, to));
+      }
+      const di = delinsSearch(lo, hi, delta, [], from, to);
+      if (di && di.score > simple + opt.delinsMinGain) v = di.v;
+    }
     // Les appels de l'allèle 2 qui chevauchent l'indel trouvé en sont des fragments.
     for (const c of [...calls.values()]) {
       if (c.alleles.includes(1)) continue;
@@ -562,6 +604,8 @@ function refitIndels(calls, { ref, winStart, seqCols, prof, reverse, opt, model 
         if (ins) tryCandidate({ pos: p, del: '', ins });
       }
     }
+    const di = delinsSearch(lo, hi, delta, others, from, to);
+    if (di && di.score > best.score + opt.delinsMinGain) best = { vars: [di.v], score: di.score };
     if (best.original) { kept.push(...cluster); continue; }
     for (const c of cluster) calls.delete(c.key);
     for (const v of best.vars) kept.push(addCall(v));
@@ -766,6 +810,7 @@ export function mergeCalls(results, ref = null) {
   }
 
   if (ref) resolveRepeatRegions(merged, results, ref);
+  if (ref) joinNeighbours(merged, ref);
 
   const out = [];
   for (const m of merged.values()) {
@@ -790,6 +835,48 @@ export function mergeCalls(results, ref = null) {
 }
 
 /**
+ * Événements hétérozygotes du même allèle séparés par au plus 2 nt : décrits ensemble par une seule
+ * délétion-insertion (convention HGVS ; ex. c.1885_1890del + c.1891C>T, ou deux substitutions
+ * contiguës). La séparation des allèles les place tous sur l'allèle 2.
+ */
+function joinNeighbours(merged, ref) {
+  const seq = ref.seq;
+  const het = m => m.reads.every(x => x.genotype === 'hétérozygote') && (m.reads.length || m.supportedBy.length);
+  const end = m => m.pos + m.del.length;
+  const list = [...merged.values()].filter(het).sort((a, b) => a.pos - b.pos);
+  const groups = [];
+  for (const m of list) {
+    const g = groups.at(-1);
+    if (g && m.pos - Math.max(...g.map(end)) <= 2 && m.pos >= Math.max(...g.map(end))) g.push(m);
+    else groups.push([m]);
+  }
+  for (const g of groups) {
+    if (g.length < 2) continue;
+    const from = g[0].pos, to = Math.max(...g.map(end));
+    const hap = applyVariants(seq, g, from, to);
+    if (hap === null) continue;
+    const v = normalize(seq, { pos: from, del: seq.slice(from, to), ins: hap });
+    if (!v.del.length && !v.ins.length) continue;
+    const template = g.find(m => m.type !== 'snv') || g[0];
+    const key = variantKey(v);
+    const entry = {
+      ...template, ...v, key, names: hgvsNames(v, ref),
+      reads: [], strands: new Set(), supportedBy: [], resolvedBy: new Set(),
+    };
+    for (const m of g) {
+      for (const x of m.reads) if (!entry.reads.some(w => w.result === x.result)) entry.reads.push({ ...x, flags: [...(x.flags || []), `réunit ${g.map(y => y.names.g.split(':')[1]).join(' + ')}`] });
+      for (const x of m.supportedBy) if (!entry.supportedBy.some(w => w.name === x.name)) entry.supportedBy.push(x);
+      for (const s of m.strands) entry.strands.add(s);
+      for (const r of m.resolvedBy || []) entry.resolvedBy.add(r);
+      merged.delete(m.key);
+    }
+    // Une lecture qui appelle l'ensemble ne le « soutient » pas en plus.
+    entry.supportedBy = entry.supportedBy.filter(x => !entry.reads.some(w => w.name === x.name));
+    merged.set(key, entry);
+  }
+}
+
+/**
  * Indels dans une répétition (série d'une même base) : résolution conjointe guidée par la référence.
  * Dans une série, une substitution voisine et l'indel peuvent s'écrire de plusieurs façons, et chaque
  * lecture peut en retenir une différente (ou perdre la substitution). La référence donne les bornes de
@@ -803,7 +890,9 @@ function resolveRepeatRegions(merged, results, ref) {
   const usable = results.filter(r => r.explainAt && r.quality?.verdict !== 'illisible');
   const done = new Set();
   const net = v => v.ins.length - v.del.length;
-  for (const seed of [...merged.values()].filter(m => m.type !== 'snv' && m.genotype !== 'homozygote')) {
+  // Seuls les indels simples (délétion, insertion, duplication) : une délétion-insertion n'est pas un
+  // changement de longueur d'une série, et ses bases insérées ne figurent pas parmi les écritures testées.
+  for (const seed of [...merged.values()].filter(m => m.type !== 'snv' && m.type !== 'delins' && m.genotype !== 'homozygote')) {
     if (!merged.has(seed.key) || done.has(seed.key)) continue;
     const d = net(seed);
     if (!d || Math.abs(d) > 10) continue;
