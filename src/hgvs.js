@@ -32,7 +32,11 @@ export const variantKey = v => `${v.pos}:${v.del}>${v.ins}`;
  * Convertisseur g. → c. pour un transcrit : exons [[début, fin]] 1-based sur la référence (brin +),
  * cdsStart / cdsEnd en coordonnées du transcrit (1-based).
  */
-export function transcriptMapper({ exons, cdsStart, cdsEnd }) {
+/**
+ * exonLabel(n) : numéro d'usage de l'exon de rang n (1-based), si le gène a une numérotation
+ * historique (ex. BRCA1 : pas d'exon 4). Par défaut, le rang lui-même.
+ */
+export function transcriptMapper({ exons, cdsStart, cdsEnd, exonLabel = n => n }) {
   const ex = exons.slice().sort((a, b) => a[0] - b[0]);
   const tStarts = [];
   let acc = 0;
@@ -85,14 +89,15 @@ export function transcriptMapper({ exons, cdsStart, cdsEnd }) {
     return pos;
   }
   /** Exon ou intron (numérotés dans l'ordre du transcrit) contenant la position génomique 1-based g. */
+  // n : numéro d'usage (un intron porte celui de l'exon qui le précède) ; next : exon suivant l'intron.
   function region(g) {
     for (let k = 0; k < ex.length; k++) {
-      if (g >= ex[k][0] && g <= ex[k][1]) return { kind: 'exon', n: k + 1 };
-      if (k + 1 < ex.length && g > ex[k][1] && g < ex[k + 1][0]) return { kind: 'intron', n: k + 1 };
+      if (g >= ex[k][0] && g <= ex[k][1]) return { kind: 'exon', n: exonLabel(k + 1), rank: k + 1 };
+      if (k + 1 < ex.length && g > ex[k][1] && g < ex[k + 1][0]) return { kind: 'intron', n: exonLabel(k + 1), next: exonLabel(k + 2), rank: k + 1 };
     }
     return { kind: g < ex[0][0] ? 'amont' : 'aval', n: null };
   }
-  return { c, g, exonic, region, tLength, exons: ex };
+  return { c, g, exonic, region, exonLabel, tLength, exons: ex };
 }
 
 /** Description HGVS (sans préfixe) d'un variant normalisé ; `coord` convertit une position 1-based. */

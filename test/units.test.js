@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseABIF } from '../src/abif.js';
 import { normalize, transcriptMapper, describe } from '../src/hgvs.js';
-import { parseGenBank, listTranscripts, cdsOfTranscript, parseLocation } from '../src/reference.js';
+import { parseGenBank, listTranscripts, cdsOfTranscript, parseLocation, buildReference } from '../src/reference.js';
 import { alignStrings } from '../src/align.js';
 import { simulate, writeABIF, rng, randomSeq } from './synth.js';
 
@@ -122,4 +122,22 @@ test('lecture d’une description c. tapée par l’utilisateur', async () => {
   assert.throws(() => parseVariantC(`c.1${seq[150] === 'A' ? 'C' : 'A'}>T`, ref), /la référence porte/);
   assert.throws(() => parseVariantC('1813dup', ref), /commencer par « c. »/);
   assert.throws(() => parseVariantC('c.5xyz', ref), /type de variant/);
+});
+
+test('numérotation usuelle des exons de BRCA1 (pas d’exon 4)', async () => {
+  const { variantLocation } = await import('../src/hgvs.js');
+  const exons = [[11, 20], [31, 40], [51, 60], [71, 80], [91, 100]];
+  const seq = 'A'.repeat(120);
+  const brca1 = buildReference({ accession: 'NG_B.1', seq, transcript: { id: 'NM_007294.4', gene: 'BRCA1', strand: '+', exons }, cds: { cdsStart: 1, cdsEnd: 30 } });
+  assert.match(brca1.exonNumbering, /pas d’exon 4/);
+  // Rangs 1..5 → exons 1, 2, 3, 5, 6 ; l'intron entre les exons 3 et 5 est l'intron 3.
+  assert.equal(variantLocation({ pos: 55, del: 'A', ins: 'G' }, brca1.mapper), 'exon 3');
+  assert.equal(variantLocation({ pos: 75, del: 'A', ins: 'G' }, brca1.mapper), 'exon 5');
+  assert.equal(variantLocation({ pos: 95, del: 'A', ins: 'G' }, brca1.mapper), 'exon 6');
+  assert.equal(variantLocation({ pos: 65, del: 'A', ins: 'G' }, brca1.mapper), 'intron 3');
+  assert.deepEqual(brca1.mapper.region(66), { kind: 'intron', n: 3, next: 5, rank: 3 });
+  // Autre transcrit de BRCA1, ou autre gène : numérotation par rang.
+  const other = buildReference({ accession: 'NG_B.1', seq, transcript: { id: 'NM_007300.4', gene: 'BRCA1', strand: '+', exons }, cds: { cdsStart: 1, cdsEnd: 30 } });
+  assert.equal(other.exonNumbering, undefined);
+  assert.equal(variantLocation({ pos: 75, del: 'A', ins: 'G' }, other.mapper), 'exon 4');
 });

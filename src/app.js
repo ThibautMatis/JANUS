@@ -59,6 +59,7 @@ function describeReference(ref) {
   } else {
     lines.push('Aucun transcrit sélectionné : nomenclature g. uniquement.');
   }
+  if (ref.exonNumbering) lines.push(`Exons : ${ref.exonNumbering}.`);
   for (const w of ref.warnings) lines.push('⚠ ' + w);
   return lines.join('\n');
 }
@@ -558,7 +559,7 @@ function contextFor(result) {
     if (region.kind === 'intron') {
       // c.N+d : exon en amont (positions génomiques plus petites) ; c.N-d : exon en aval.
       const upstream = /\+\d+$/.test(m.c(g));
-      nearest = { n: upstream ? region.n : region.n + 1, left: upstream !== reverse };
+      nearest = { n: upstream ? region.n : region.next, left: upstream !== reverse };
     }
     let codon = null;
     const t = m.exonic(g);
