@@ -445,11 +445,11 @@ function renderVariants() {
   for (const v of sortedVariants()) {
     const tr = document.createElement('tr');
     tr.className = 'clickable' + (state.sought && state.sought.variant.key === v.key ? ' sought' : '');
+    cell(tr, v.names.g.split(':')[1], 'mono');
     cell(tr, v.names.c ? v.names.c.split(':')[1] : '—', 'mono');
-    cell(tr, v.location || '—');
     const p = cell(tr, v.protein?.short || '—', 'mono');
     p.title = v.protein?.effect || '';
-    cell(tr, v.names.g.split(':')[1], 'mono');
+    cell(tr, v.location || '—');
     cell(tr, TYPE_LABEL[v.type] || v.type);
     cell(tr, v.genotype);
     const fractions = v.reads.map(x => x.alleleFraction).filter(Number.isFinite);
