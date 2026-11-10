@@ -123,6 +123,18 @@ export function cdsFromGenomic(record, transcript) {
 }
 
 /**
+ * Numérotations d'exons historiques encore en usage, par gène et transcrit concerné.
+ * BRCA1 (NM_007294) : l'exon 4 n'existe pas ; les exons 4 à 23 du transcrit sont numérotés 5 à 24.
+ */
+export const EXON_NUMBERING = {
+  BRCA1: {
+    transcript: /^NM_007294\./,
+    label: n => (n >= 4 ? n + 1 : n),
+    note: 'numérotation usuelle des exons de BRCA1 (pas d’exon 4 : exons 1–3 puis 5–24)',
+  },
+};
+
+/**
  * Référence génomique prête pour l'analyse.
  * transcript : { id, exons, strand } (facultatif) ; cds : { cdsStart, cdsEnd } (facultatif) ;
  * nmSeq : séquence NM_ pour vérifier que les exons concaténés lui correspondent.
@@ -141,7 +153,10 @@ export function buildReference({ accession, seq, definition = '', transcript = n
   }
   ref.transcript = transcript;
   if (cds) {
-    ref.mapper = transcriptMapper({ exons: transcript.exons, ...cds });
+    const rule = EXON_NUMBERING[(transcript.gene || '').toUpperCase()];
+    const custom = rule && rule.transcript.test(transcript.id) ? rule : null;
+    ref.mapper = transcriptMapper({ exons: transcript.exons, ...cds, ...(custom ? { exonLabel: custom.label } : {}) });
+    if (custom) ref.exonNumbering = custom.note;
     ref.cds = cds;
     const start = ref.mapper.exons.length && spliced.slice(cds.cdsStart - 1, cds.cdsStart + 2);
     if (start !== 'ATG') ref.warnings.push(`Le CDS de ${transcript.id} ne commence pas par ATG dans la référence : vérifier.`);

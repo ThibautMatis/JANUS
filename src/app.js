@@ -59,6 +59,7 @@ function describeReference(ref) {
   } else {
     lines.push('Aucun transcrit sélectionné : nomenclature g. uniquement.');
   }
+  if (ref.exonNumbering) lines.push(`Exons : ${ref.exonNumbering}.`);
   for (const w of ref.warnings) lines.push('⚠ ' + w);
   return lines.join('\n');
 }
@@ -558,7 +559,7 @@ function contextFor(result) {
     if (region.kind === 'intron') {
       // c.N+d : exon en amont (positions génomiques plus petites) ; c.N-d : exon en aval.
       const upstream = /\+\d+$/.test(m.c(g));
-      nearest = { n: upstream ? region.n : region.n + 1, left: upstream !== reverse };
+      nearest = { n: upstream ? region.n : region.next, left: upstream !== reverse };
     }
     let codon = null;
     const t = m.exonic(g);
@@ -788,6 +789,30 @@ $('repConclusion').addEventListener('input', () => { report.edited = true; rende
 $('repRegenerate').addEventListener('click', () => { updateConclusion(true); renderReportPreview(); });
 for (const id of ['repSample', 'repAuthor']) $(id).addEventListener('input', () => renderReportPreview());
 
+/**
+ * Bandeau au-dessus d'une capture du rapport : sens de la lecture par rapport au gène. Une lecture
+ * Reverse est affichée dans son propre sens : bases complémentaires, gène orienté de droite à gauche.
+ */
+function directionBadge(result) {
+  const forward = result.strand === '+';
+  return el('div', { class: `direction ${forward ? 'forward' : 'reverse'}` },
+    el('span', { class: 'badge' }, forward ? 'FORWARD' : 'REVERSE'),
+    el('span', { class: 'arrow', 'aria-hidden': 'true' }, forward ? '5′ ━━━━━━━━━▶ 3′' : '3′ ◀━━━━━━━━━ 5′'),
+    el('span', { class: 'text' }, forward
+      ? 'lu dans le sens du gène (de gauche à droite)'
+      : 'brin complémentaire : bases complémentaires du gène, qui va de droite à gauche'));
+}
+
+/**
+ * Bases de la référence génomique concernées par un variant normalisé (1-based, bornes incluses) :
+ * bases supprimées ou substituées, bases dupliquées, ou les deux bases qui encadrent une insertion.
+ */
+function alteredSpan(v) {
+  if (v.del.length) return { from: v.pos + 1, to: v.pos + v.del.length };
+  if (v.type === 'dup') return { from: v.pos - v.ins.length + 1, to: v.pos };
+  return { from: v.pos, to: v.pos + 1 };
+}
+
 /** Capture centrée sur le variant pour chaque lecture qui le soutient (appel direct ou modélisation). */
 function variantFigures(v) {
   const sources = [
@@ -805,12 +830,13 @@ function variantFigures(v) {
     const key = `${v.key}|${result.name}`;
     if (!report.images.has(key)) {
       const ann = annotationsOf(result);
-      report.images.set(key, snapshot(result.read, ann.map, [center], center, { gaps: ann.gaps, context: contextFor(result) }));
+      report.images.set(key, snapshot(result.read, ann.map, [center], center, { gaps: ann.gaps, context: contextFor(result), box: alteredSpan(v) }));
     }
     const pos = state.ref.mapper ? `c.${state.ref.mapper.c(v.pos + 1)}` : `g.${v.pos + 1}`;
     return el('figure', {},
+      directionBadge(result),
       el('img', { src: report.images.get(key), alt: `Chromatogramme ${result.name} autour de ${pos}` }),
-      el('figcaption', {}, `${result.name} (${result.strand === '+' ? 'Forward' : 'Reverse'}, ${how}) — base ${center + 1} surlignée ; lignes : lecture, génome, allèle 1, allèle 2 (sens de lecture).`));
+      el('figcaption', {}, `${result.name} (${result.strand === '+' ? 'Forward' : 'Reverse'}, ${how}) — base ${center + 1} surlignée, bases de référence concernées encadrées en rouge ; lignes : lecture, génome, allèle 1, allèle 2 (sens de lecture).`));
   });
 }
 
@@ -831,12 +857,28 @@ function soughtSection() {
     const key = `recherche|${v.key}|${x.result.name}`;
     if (!report.images.has(key)) {
       const ann = annotationsOf(x.result);
-      report.images.set(key, snapshot(x.result.read, ann.map, [x.center], x.center, { gaps: ann.gaps, context: contextFor(x.result) }));
+      report.images.set(key, snapshot(x.result.read, ann.map, [x.center], x.center, { gaps: ann.gaps, context: contextFor(x.result), box: alteredSpan(v) }));
     }
     out.push(el('figure', {},
+      directionBadge(x.result),
       el('img', { src: report.images.get(key), alt: `Chromatogramme ${x.result.name} à la position ${v.names.c}` }),
-      el('figcaption', {}, `${x.result.name} (${x.result.strand === '+' ? 'Forward' : 'Reverse'}) — position du variant recherché surlignée : ${soughtReadVerdict(s, x)}.`)));
+      el('figcaption', {}, `${x.result.name} (${x.result.strand === '+' ? 'Forward' : 'Reverse'}) — position du variant recherché surlignée, bases de référence concernées encadrées en rouge : ${soughtReadVerdict(s, x)}.`)));
   }
+  return out;
+}
+
+/** Texte où chaque occurrence du symbole du gène est mise en italique (convention de nomenclature). */
+function italicGene(text, gene) {
+  if (!gene) return [text];
+  const re = new RegExp(`(?<![A-Za-z0-9])${gene.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')}(?![A-Za-z0-9])`, 'g');
+  const out = [];
+  let last = 0;
+  for (const m of text.matchAll(re)) {
+    if (m.index > last) out.push(text.slice(last, m.index));
+    out.push(el('i', { class: 'gene' }, m[0]));
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) out.push(text.slice(last));
   return out;
 }
 
@@ -873,14 +915,14 @@ function renderReportPreview() {
 
   view.replaceChildren(
     el('img', { class: 'report-logo', src: 'img/janus-logo.png', alt: 'JANUS' }),
-    el('h1', {}, `Analyse par séquençage Sanger — gène ${gene}`),
+    el('h1', {}, 'Analyse par séquençage Sanger — gène ', el('i', { class: 'gene' }, gene)),
     el('p', { class: 'meta' }, [
       $('repSample').value.trim() ? `Échantillon : ${$('repSample').value.trim()}` : null,
       `Date : ${date}`,
       $('repAuthor').value.trim() ? `Analyse : ${$('repAuthor').value.trim()}` : null,
     ].filter(Boolean).join(' · ')),
     el('h2', {}, 'Conclusion'),
-    el('p', { class: 'conclusion' }, $('repConclusion').value.trim() || '—'),
+    el('p', { class: 'conclusion' }, italicGene($('repConclusion').value.trim() || '—', gene)),
     ...soughtSection(),
     el('h2', {}, selected.length > 1 ? 'Variants retenus' : 'Variant retenu'),
     ...variants,
