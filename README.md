@@ -1,10 +1,12 @@
 <img src="img/janus-logo.png" alt="JANUS — Sanger deconvolution & variant calling" height="90">
 
+**Français** · [English](README.en.md)
+
 # JANUS — *Joint Allele aNalysis Using Sanger*
 
 **v0.8.9 · 10 novembre 2026**
 
-Outil web d’appel de variants sur chromatogrammes Sanger (`.ab1`) dérivé de Tracy (Raush T et al. *BMC Genomics*. 2020;21:230. doi:10.1186/s12864-020-6635-8)
+Outil web d’appel de variants sur chromatogrammes Sanger (`.ab1`) dérivé de Tracy (Rausch T et al. *BMC Genomics*. 2020;21:230. doi:10.1186/s12864-020-6635-8)
 
 **Accès :** https://thibautmatis.github.io/JANUS/
 
