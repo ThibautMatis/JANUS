@@ -352,7 +352,7 @@ function renderReads() {
   table.hidden = !state.results.length && !state.failed.length;
   for (const r of state.results) {
     const tr = document.createElement('tr');
-    cell(tr, r.name, 'mono');
+    cell(tr, r.name, 'mono read-name');
     cell(tr, r.strand === '+' ? 'Forward (+)' : 'Reverse (−)');
     const [label, kind] = QUALITY_TAG[r.quality.verdict];
     const q = cell(tr, tag(label, kind));
@@ -364,7 +364,7 @@ function renderReads() {
     const ck = checkSummary(r);
     const cc = cell(tr, ck ? tag(ck.ok ? 'concordant' : 'à vérifier', ck.ok ? 'ok' : 'warn') : '—');
     if (ck) cc.append(el('div', { class: 'note' }, ck.lines.join(' · ')));
-    cell(tr, regionLabel(r), 'mono');
+    cell(tr, regionLabel(r), 'mono read-region');
     cell(tr, `${r.alignedBases} / ${r.usableBases}`);
     cell(tr, `${Math.round(100 * r.mixedFraction)} %`);
     const shift = r.partial ? Math.abs(r.partial.ins.length - r.partial.del.length) : 0;
@@ -373,7 +373,7 @@ function renderReads() {
   }
   for (const f of state.failed) {
     const tr = document.createElement('tr');
-    cell(tr, f.name, 'mono');
+    cell(tr, f.name, 'mono read-name');
     const strand = strandFromName(f.name);
     cell(tr, strand ? `${strand === '+' ? 'Forward' : 'Reverse'} ? (d’après le nom)` : '—');
     const q = cell(tr, tag('illisible', 'bad'));
@@ -445,11 +445,11 @@ function renderVariants() {
   for (const v of sortedVariants()) {
     const tr = document.createElement('tr');
     tr.className = 'clickable' + (state.sought && state.sought.variant.key === v.key ? ' sought' : '');
+    cell(tr, v.names.g.split(':')[1], 'mono');
     cell(tr, v.names.c ? v.names.c.split(':')[1] : '—', 'mono');
-    cell(tr, v.location || '—');
     const p = cell(tr, v.protein?.short || '—', 'mono');
     p.title = v.protein?.effect || '';
-    cell(tr, v.names.g.split(':')[1], 'mono');
+    cell(tr, v.location || '—');
     cell(tr, TYPE_LABEL[v.type] || v.type);
     cell(tr, v.genotype);
     const fractions = v.reads.map(x => x.alleleFraction).filter(Number.isFinite);
