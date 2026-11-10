@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src https://eutils.ncbi.nlm.nih.gov https://rest.ensembl.org https://gnomad.broadinstitute.org; img-src 'self' data:; style-src 'self'; script-src 'self'">
   <title>JANUS · variants Sanger</title>
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=0.8.9">
   <link rel="icon" type="image/png" sizes="32x32" href="img/favicon-32.png">
   <link rel="apple-touch-icon" href="img/icon-192.png">
 </head>
@@ -72,7 +72,7 @@
       <div id="readStatus" class="status" aria-live="polite">En attente de fichiers.</div>
       <div id="soughtStatus" class="sought-box" aria-live="polite" hidden></div>
       <div class="scroll"><table id="readTable" hidden>
-        <thead><tr><th>Lecture</th><th>Brin</th><th>Lisibilité</th><th>Contrôle direct</th><th>Région</th><th>Bases alignées</th><th>Pics mixtes</th><th>Variants</th></tr></thead>
+        <thead><tr><th class="col-read">Lecture</th><th>Brin</th><th>Lisibilité</th><th class="col-check" title="Bases appelées par le séquenceur alignées directement sur la séquence de référence génomique, indépendamment de la déconvolution">Contrôle Séq. Réf.</th><th>Région</th><th>Bases alignées</th><th>Pics mixtes</th><th class="col-variants">Variants</th></tr></thead>
         <tbody></tbody>
       </table></div>
     </section>

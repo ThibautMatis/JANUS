@@ -149,3 +149,10 @@ textarea { font: inherit; color: inherit; background: var(--card); width: 100%; 
 .report .direction.forward .arrow { color: #127a94; }
 .report .direction.reverse .badge { background: #b4590a; }
 .report .direction.reverse .arrow { color: #b4590a; }
+
+/* Tableau des lectures : nom de fichier replié sur plusieurs lignes, contrôle de référence plus large. */
+#readTable th.col-read { width: 190px; }
+#readTable td.read-name { white-space: normal; overflow-wrap: anywhere; max-width: 190px; }
+#readTable th.col-check { min-width: 230px; }
+#readTable td.read-region { white-space: normal; min-width: 160px; }
+#readTable th.col-variants { min-width: 170px; }
