@@ -954,9 +954,17 @@ function splitNeighbours(merged, results, ref) {
     // peut y faire préférer à tort « indel + une base changée » (cas MSH6 : c.3968T>G inventé sur la Reverse,
     // alors que la Forward montre un T seul).
     const before = r => (r.strand === '+' ? snv.pos < indel.pos : snv.pos >= indel.pos + indel.del.length);
-    const clean = usable.filter(r => before(r) && r.refStart + 5 <= snv.pos + 1 && r.refEnd - 5 >= snv.pos + 1);
-    const gains = new Map(clean.map(r => [r, modelSupport(r, snv, seq)]));
-    const seen = clean.filter(r => (gains.get(r) ?? -Infinity) >= 2);
+    const covering = usable.filter(r => r.refStart + 5 <= snv.pos + 1 && r.refEnd - 5 >= snv.pos + 1);
+    // Gain de la substitution sur chaque lecture, l'indel étant dans le modèle (sans lui, la lecture serait
+    // mal décalée et la substitution jugée à tort) ; les autres variants de la lecture hors de la zone aussi.
+    const lo = m.pos, hi = m.pos + m.del.length;
+    const gainOf = r => {
+      const own = r.variants.filter(x => x.genotype === 'hétérozygote' && (x.pos + Math.max(1, x.del.length) <= lo - 3 || x.pos >= hi + 3));
+      return r.explain([...own, indel, snv]) - r.explain([...own, indel]);
+    };
+    const gains = new Map(covering.map(r => [r, gainOf(r)]));
+    const clean = covering.filter(before);
+    const seen = clean.filter(r => gains.get(r) >= 2);
     const names = { snv: hgvsNames(snv, ref), indel: hgvsNames(indel, ref) };
     const sg = names.snv.g.split(':')[1], ig = names.indel.g.split(':')[1];
     const copy = (x, extra) => ({
@@ -974,10 +982,12 @@ function splitNeighbours(merged, results, ref) {
     // La substitution n'est « appelée » que par les lectures qui la montrent ; les autres sont réévaluées
     // ensuite comme pour tout variant (soutien par modélisation, ou non retrouvé).
     const e = copy(snv, `en cis (même allèle) avec ${ig}`);
-    if (clean.length) {
-      e.reads = e.reads.filter(x => seen.includes(x.result));
-      e.strands = new Set(e.reads.map(x => x.strand));
-      e.resolvedBy = new Set();
+    if (covering.length) {
+      const shows = covering.filter(r => gains.get(r) >= 2);
+      e.reads = e.reads.filter(x => shows.includes(x.result));
+      e.supportedBy = shows.filter(r => !e.reads.some(x => x.result === r)).map(r => ({ name: r.name, strand: r.strand, gain: gains.get(r) }));
+      e.strands = new Set([...e.reads.map(x => x.strand), ...e.supportedBy.map(x => x.strand)]);
+      e.resolvedBy = new Set(covering); // déjà jugée sur chaque lecture qui la couvre
     }
     e.cis = ig;
     merged.set(e.key, e);
