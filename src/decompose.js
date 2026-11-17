@@ -33,6 +33,7 @@ export const DEFAULTS = {
   maxInsertion: 40,   // taille maximale des insertions recherchées (nt)
   scanMinGain: 20,    // gain d'ajustement minimal pour retenir un indel trouvé par recherche du décalage
   scanMinConcordance: 0.6, // part des pics mixtes expliqués par la séquence décalée
+  delinsMaxInsert: 12, // bases insérées maximales testées pour une délétion-insertion
   delinsMinGain: 2,   // gain d'ajustement minimal d'une délétion-insertion sur l'indel simple de même bilan
 };
 
@@ -488,14 +489,16 @@ function refitIndels(calls, { ref, winStart, seqCols, prof, reverse, opt, model 
   const addCall = v => {
     const key = variantKey(v);
     // Une substitution doit garder sa colonne (profil de pics) pour être évaluée ensuite.
-    const cols = v.type === 'snv' ? seqCols.filter(c => c.t !== null && c.t + winStart === v.pos) : [];
+    const colAt = g => seqCols.find(c => c.t !== null && c.t + winStart === g);
+    const cols = v.type === 'snv' ? seqCols.filter(c => c.t !== null && c.t + winStart === v.pos)
+      : v.del.length === v.ins.length ? [...v.del].map((_, i) => colAt(v.pos + i)) : [];
     const call = { ...v, key, alleles: [2], cols, refit: true, qFirst: nearestCol(v.pos), qAfter: nearestCol(v.pos + v.del.length) };
     calls.set(key, call);
     return call;
   };
 
   /**
-   * Meilleure délétion-insertion de bilan `delta` autour de [lo, hi) : k bases (1 à 4) lues dans le
+   * Meilleure délétion-insertion de bilan `delta` autour de [lo, hi) : k bases (1 à delinsMaxInsert) lues dans le
    * signal de l'allèle 2 remplacent k − delta bases de la référence. Ex. BRCA1 c.1885_1893delinsTCT
    * (9 nt remplacés par 3), qui ressemble à une délétion de 6 nt suivie d'une substitution, mais dont
    * seules les bases TCT expliquent l'allèle 2.
@@ -503,7 +506,7 @@ function refitIndels(calls, { ref, winStart, seqCols, prof, reverse, opt, model 
   const delinsSearch = (lo, hi, delta, others, from, to) => {
     let best = null;
     for (let p = Math.max(A + 1, lo - 8); p <= Math.min(B - 1, hi + 8); p++) {
-      for (let k = 1; k <= 4; k++) {
+      for (let k = 1; k <= opt.delinsMaxInsert; k++) {
         const d = k - delta; // bases supprimées
         if (d < 1 || p + d > B) continue;
         const ins = inferBases(p, k, delta);
@@ -672,6 +675,28 @@ function assess(call, seqCols, prof, opt, reverse) {
     return out;
   }
 
+  // Délétion-insertion de même longueur (substitutions contiguës) : rien n'est décalé, chaque base
+  // changée se juge comme une substitution (double pic net au-dessus du bruit de fond).
+  if (call.type === 'delins' && call.del.length === call.ins.length) {
+    const fr = [];
+    for (let i = 0; i < call.del.length; i++) {
+      if (call.del[i] === call.ins[i]) continue;
+      const col = call.cols[i];
+      if (!col) return null;
+      const x = prof[col.q], alt = h(x, call.ins[i]), wt = h(x, call.del[i]);
+      if (!both) {
+        if (!col.mixed) return null;
+        const near = prof.slice(Math.max(0, col.q - 10), col.q + 11).map(y => y.h.slice().sort((a, b) => b - a)[2]).sort((a, b) => a - b);
+        if (Math.min(alt, wt) < opt.snrMin * (near[Math.floor(near.length / 2)] || 0)) return null;
+      }
+      fr.push(alt / Math.max(1, alt + wt));
+    }
+    if (!fr.length) return null;
+    out.alleleFraction = fr.reduce((a, b) => a + b, 0) / fr.length;
+    out.evidence = `${fr.length} double(s) pic(s) contigu(s)`;
+    return out;
+  }
+
   // Indels et délétions-insertions.
   const anchor = call.qFirst === Infinity ? call.qAfter : call.qFirst;
   const window = (a, b) => {
@@ -811,6 +836,7 @@ export function mergeCalls(results, ref = null) {
 
   if (ref) resolveRepeatRegions(merged, results, ref);
   if (ref) joinNeighbours(merged, ref);
+  if (ref) splitNeighbours(merged, ref);
 
   const out = [];
   for (const m of merged.values()) {
@@ -835,9 +861,10 @@ export function mergeCalls(results, ref = null) {
 }
 
 /**
- * Événements hétérozygotes du même allèle séparés par au plus 2 nt : décrits ensemble par une seule
- * délétion-insertion (convention HGVS ; ex. c.1885_1890del + c.1891C>T, ou deux substitutions
- * contiguës). La séparation des allèles les place tous sur l'allèle 2.
+ * Événements hétérozygotes du même allèle et contigus (aucune base intacte entre eux) : décrits ensemble
+ * par une seule délétion-insertion (HGVS ; ex. deux substitutions voisines c.100A>T + c.101C>G →
+ * c.100_101delinsTG). Des événements séparés par au moins une base intacte restent décrits séparément
+ * (ex. un polymorphisme en cis à 2 nt d'une délétion : splitNeighbours).
  */
 function joinNeighbours(merged, ref) {
   const seq = ref.seq;
@@ -847,7 +874,7 @@ function joinNeighbours(merged, ref) {
   const groups = [];
   for (const m of list) {
     const g = groups.at(-1);
-    if (g && m.pos - Math.max(...g.map(end)) <= 2 && m.pos >= Math.max(...g.map(end))) g.push(m);
+    if (g && m.pos === Math.max(...g.map(end))) g.push(m);
     else groups.push([m]);
   }
   for (const g of groups) {
@@ -873,6 +900,62 @@ function joinNeighbours(merged, ref) {
     // Une lecture qui appelle l'ensemble ne le « soutient » pas en plus.
     entry.supportedBy = entry.supportedBy.filter(x => !entry.reads.some(w => w.name === x.name));
     merged.set(key, entry);
+  }
+}
+
+/**
+ * Délétion-insertion qui s'écrit exactement comme UN indel simple + UNE substitution séparés par au
+ * moins une base intacte (ex. MSH6 c.3968_3980delinsGTG = c.3968T>G + c.3971_3980del) : décrite par
+ * ces deux événements, en cis. La substitution est souvent un polymorphisme connu, et l'indel doit
+ * garder le nom sous lequel il figure dans les bases de données et la littérature.
+ */
+function splitSnvFromIndel(v) {
+  const seg = v.del, alt = v.ins, d = seg.length, k = alt.length, L = Math.abs(d - k);
+  if (!L || !d) return null;
+  for (let i = 0; i < d; i++) {
+    for (const b of DNA) {
+      if (b === seg[i]) continue;
+      const s2 = seg.slice(0, i) + b + seg.slice(i + 1);
+      if (d > k) {
+        for (let j = 0; j + L <= d; j++) {
+          if ((i < j ? j - i - 1 : i - (j + L)) < 1) continue; // au moins une base intacte entre les deux
+          if (s2.slice(0, j) + s2.slice(j + L) === alt) {
+            return [{ pos: v.pos + i, del: seg[i], ins: b }, { pos: v.pos + j, del: seg.slice(j, j + L), ins: '' }];
+          }
+        }
+      } else {
+        for (let j = 0; j <= d; j++) {
+          if ((i < j ? j - 1 - i : i - j) < 1) continue;
+          if (alt.slice(0, j) === s2.slice(0, j) && alt.slice(j + L) === s2.slice(j)) {
+            return [{ pos: v.pos + i, del: seg[i], ins: b }, { pos: v.pos + j, del: '', ins: alt.slice(j, j + L) }];
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function splitNeighbours(merged, ref) {
+  const seq = ref.seq;
+  for (const m of [...merged.values()]) {
+    if (m.type !== 'delins') continue;
+    const parts = splitSnvFromIndel(m);
+    if (!parts) continue;
+    const vs = parts.map(x => normalize(seq, x));
+    if (vs.some(x => !x.del.length && !x.ins.length)) continue;
+    merged.delete(m.key);
+    const names = vs.map(x => hgvsNames(x, ref));
+    vs.forEach((x, n) => {
+      const other = names[1 - n].g.split(':')[1];
+      const key = variantKey(x);
+      merged.set(key, {
+        ...m, ...x, key, names: names[n],
+        reads: m.reads.map(r => ({ ...r, flags: [...(r.flags || []), `en cis (même allèle) avec ${other}`] })),
+        strands: new Set(m.strands), supportedBy: [...m.supportedBy], resolvedBy: new Set(m.resolvedBy || []),
+        cis: other,
+      });
+    });
   }
 }
 
