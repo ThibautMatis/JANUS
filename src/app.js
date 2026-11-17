@@ -15,7 +15,11 @@ import { directCheck, explainDiscrepancy, explainShift } from './check.js';
 import { genomicMapping, gnomadId, gnomadFrequencies, gnomadUrl } from './gnomad.js';
 
 const $ = id => document.getElementById(id);
-const state = { ref: null, ngRecord: null, localGenBank: null, results: [], failed: [], merged: [] };
+const state = { ref: null, ngRecord: null, localGenBank: null, results: [], failed: [], merged: [],
+  // Chromatogramme : position génomique suivie (variant cliqué, base sélectionnée), brin préféré, et
+  // lecture Reverse affichée dans le sens du gène (retournée, bases complémentées) ou non.
+  focus: null, strandPref: '+', flipReverse: false };
+try { state.flipReverse = localStorage.getItem('janus.flip') === '1'; } catch { /* facultatif */ }
 
 const TYPE_LABEL = { snv: 'SNV', del: 'délétion', dup: 'duplication', ins: 'insertion', delins: 'délétion-insertion' };
 
@@ -216,7 +220,7 @@ $('analyze').addEventListener('click', async () => {
   const s = state.sought;
   if (s && !s.found) {
     const first = s.reads.find(x => x.center !== null && x.gain !== null) || s.reads.find(x => x.center !== null);
-    if (first) { $('traceRead').value = String(state.results.indexOf(first.result)); showTrace(state.results.indexOf(first.result), first.center); }
+    if (first) focusOn(s.variant.pos + 1, { r: first.result, center: first.center });
   }
 });
 
@@ -292,9 +296,8 @@ function renderSought() {
   for (const x of s.reads) {
     const go = el('button', { type: 'button', class: 'ghost' }, 'Voir');
     go.addEventListener('click', () => {
-      const i = state.results.indexOf(x.result);
-      $('traceRead').value = String(i);
-      showTrace(i, x.center);
+      state.strandPref = x.result.strand;
+      focusOn(v.pos + 1, { r: x.result, center: x.center });
       $('step-trace').scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
     lines.push(el('li', {}, `${x.result.name} (${x.result.strand === '+' ? 'Forward' : 'Reverse'}) : ${soughtReadVerdict(s, x)}`, x.center !== null ? go : null));
@@ -491,11 +494,32 @@ function showVariant(v) {
   detail.textContent = lines.join('\n');
   detail.hidden = false;
 
-  const first = v.reads[0];
-  const idx = state.results.indexOf(first.result);
-  $('traceRead').value = String(idx);
-  showTrace(idx, first.readBase - 1);
+  focusOn(v.pos + 1, pickRead(v));
   $('step-trace').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+/**
+ * Lecture sur laquelle montrer un variant : celle du brin choisi en dernier (Forward par défaut), de
+ * préférence une lecture qui l'a appelé, sinon une lecture qui couvre sa position.
+ */
+function pickRead(v) {
+  const g = v.pos + 1;
+  const cands = state.results.map(r => {
+    const called = v.reads.find(x => x.result === r);
+    // Même position génomique sur les deux brins (le changement de lecture reste ainsi sur le variant).
+    const center = centerFor(r, g) ?? (called ? called.readBase - 1 : null);
+    return center === null ? null : { r, center, rank: (r.strand === state.strandPref ? 0 : 2) + (called ? 0 : 1) };
+  }).filter(Boolean).sort((a, b) => a.rank - b.rank);
+  return cands[0] || null;
+}
+
+/** Centre le chromatogramme sur la position génomique g (1-based), sur la lecture choisie. */
+function focusOn(g, pick) {
+  state.focus = { g };
+  if (!pick) return;
+  const i = state.results.indexOf(pick.r);
+  $('traceRead').value = String(i);
+  showTrace(i, pick.center);
 }
 
 $('exportCsv').addEventListener('click', () => {
@@ -531,28 +555,28 @@ function hoverLabel(col) {
     const { g, genome } = col.gap;
     return [cOf(g) || `g.${g}`, [cOf(g) ? `g.${g}` : null, `génome ${genome}`, 'aucun pic en face (base absente de la lecture)'].filter(Boolean).join(' · ')];
   }
-  const k = col.k, a = view.annotationMap?.get(k);
-  if (!r || !a?.g) return [`base ${k + 1}`, k < r?.trim[0] || k >= r?.trim[1] ? 'hors de la zone analysée' : a?.genome === '-' ? 'base lue absente du génome (insertion)' : 'non alignée sur la référence'];
+  const k = col.k, a = view.annotationMap?.get(k), o = r ? toOrig(r, k) : k;
+  if (!r || !a?.g) return [`base ${o + 1}`, o < r?.trim[0] || o >= r?.trim[1] ? 'hors de la zone analysée' : a?.genome === '-' ? 'base lue absente du génome (insertion)' : 'non alignée sur la référence'];
   const alleles = a.a1 === a.a2 ? `${a.a1}` : `${a.a1}/${a.a2}`;
   // Bases dans le sens de la lecture, comme sous les pics : complémentaires du transcrit sur une Reverse.
-  const strand = r.strand === '-' ? ' (brin −)' : '';
+  const strand = view.disp?.flipped ? ' (sens du gène)' : r.strand === '-' ? ' (brin −)' : '';
   const cd = view.context?.(a.g)?.codon;
   const codon = cd ? `codon ${cd.n} (${cd.aa3}, base ${cd.phase + 1}/3)` : null;
-  return [cOf(a.g) || `g.${a.g}`, [cOf(a.g) ? `g.${a.g}` : null, `base ${k + 1}`, `génome ${a.genome}`, `allèles ${alleles}${strand}`, codon].filter(Boolean).join(' · ')];
+  return [cOf(a.g) || `g.${a.g}`, [cOf(a.g) ? `g.${a.g}` : null, `base ${o + 1}`, `génome ${a.genome}`, `allèles ${alleles}${strand}`, codon].filter(Boolean).join(' · ')];
 }
 
 /**
  * Contexte d'une position génomique pour le bandeau du chromatogramme : exon / intron (et, dans un
  * intron, l'exon le plus proche et son côté à l'écran), codon et acide aminé de référence.
  */
-function contextFor(result) {
+function contextFor(result, flipped = false) {
   const ref = state.ref, m = ref.mapper;
   if (!m) return null;
   if (!ref._protein && ref.cds) {
     const spliced = m.exons.map(([s, e]) => ref.seq.slice(s - 1, e)).join('');
     ref._protein = translate(spliced.slice(ref.cds.cdsStart - 1));
   }
-  const reverse = result.strand === '-';
+  const reverse = result.strand === '-' && !flipped;
   return g => {
     const region = m.region(g);
     let nearest = null;
@@ -619,49 +643,116 @@ function checkSummary(r) {
 function renderTraceSelect() {
   const select = $('traceRead');
   select.replaceChildren();
-  state.results.forEach((r, i) => select.append(option(String(i), `${r.name} (${r.strand})`)));
+  state.results.forEach((r, i) => select.append(option(String(i), `${r.name} (${r.strand === '+' ? 'Forward' : 'Reverse'})`)));
   if (state.results.length) showTrace(0);
 }
+
+/**
+ * Données affichées pour une lecture : telles quelles, ou, pour une Reverse affichée dans le sens du
+ * gène, retournées (de droite à gauche) et complémentées, courbes A↔T et C↔G échangées. Les indices de
+ * base affichés sont alors n − 1 − k ; toOrig / toDisp convertissent.
+ */
+function displayOf(r) {
+  const flipped = r.strand === '-' && state.flipReverse;
+  r._disp ??= {};
+  if (r._disp[flipped]) return r._disp[flipped];
+  const ann = annotationsOf(r), n = r.read.bases.length;
+  let d;
+  if (!flipped) d = { read: r.read, map: ann.map, gaps: ann.gaps, flipped, n };
+  else {
+    const src = r.read, L = src.traces.A.length, rev = a => Array.from(a).reverse();
+    const read = {
+      ...src,
+      bases: Array.from({ length: n }, (_, i) => complement(src.bases[n - 1 - i])).join(''),
+      positions: Array.from({ length: n }, (_, i) => L - 1 - src.positions[n - 1 - i]),
+      traces: { A: rev(src.traces.T), C: rev(src.traces.G), G: rev(src.traces.C), T: rev(src.traces.A) },
+    };
+    const c = b => (b && b !== '-' ? complement(b) : b);
+    const map = new Map(), gaps = new Map();
+    for (const [k, a] of ann.map) map.set(n - 1 - k, { ...a, genome: c(a.genome), a1: c(a.a1), a2: c(a.a2) });
+    // Bases du génome placées après la base k (sens de la lecture) : à l'écran, juste avant n − 1 − k.
+    for (const [k, list] of ann.gaps) if (n - 2 - k >= 0) gaps.set(n - 2 - k, list.slice().reverse().map(x => ({ ...x, genome: c(x.genome) })));
+    d = { read, map, gaps, flipped, n };
+  }
+  r._disp[flipped] = d;
+  return d;
+}
+const toDisp = (r, k) => (k === null || k === undefined ? k : displayOf(r).flipped ? displayOf(r).n - 1 - k : k);
+const toOrig = toDisp; // la conversion est sa propre inverse
 
 function showTrace(i, center = null) {
   const r = state.results[i];
   if (!r) return;
+  const d = displayOf(r);
   // Repères : variants appelés sur cette lecture et position du variant recherché.
   const markers = r.variants.map(v => v.readBase - 1);
   const soughtAt = state.sought?.reads.find(x => x.result === r)?.center;
   if (soughtAt !== undefined && soughtAt !== null) markers.push(soughtAt);
-  if (view.result !== r) {
+  const shown = markers.map(k => toDisp(r, k));
+  if (view.result !== r || view.disp !== d) {
     view.result = r;
-    const ann = annotationsOf(r);
-    view.annotationMap = ann.map;
-    view.context = contextFor(r);
-    view.setRead(r.read, ann.map, markers, ann.gaps);
+    view.disp = d;
+    view.annotationMap = d.map;
+    view.context = contextFor(r, d.flipped);
+    view.numberOf = k => toOrig(r, k) + 1; // numéros de base du fichier, même retourné
+    view.setRead(d.read, d.map, shown, d.gaps);
   } else {
-    view.markers = markers;
+    view.markers = shown;
     view.draw();
   }
+  renderStrandNote(r, d);
   if (center !== null) {
-    view.centerOn(center);
-    describeBase(center);
+    view.centerOn(toDisp(r, center));
+    describeBase(toDisp(r, center));
   }
+}
+
+/** Mention discrète du sens d'affichage, et case pour retourner une lecture Reverse. */
+function renderStrandNote(r, d) {
+  const reverse = r.strand === '-';
+  $('flipBox').hidden = !reverse;
+  $('flipReverse').checked = state.flipReverse;
+  const note = $('strandNote');
+  note.hidden = !reverse;
+  note.textContent = !reverse ? '' : d.flipped
+    ? '⇄ Lecture Reverse retournée : bases complémentées, gène de gauche à droite (5′→3′), comme sur une Forward.'
+    : '⇄ Lecture Reverse affichée dans son sens de lecture : brin complémentaire, le gène va de droite à gauche.';
 }
 
 function describeBase(k) {
   const r = view.result;
   if (!r) return;
-  const a = view.annotationMap.get(k);
-  let text = `${r.name} · base ${k + 1} : ${r.read.bases[k]}`;
+  const a = view.annotationMap.get(k), o = toOrig(r, k);
+  let text = `${r.name} · base ${o + 1} : ${view.disp.read.bases[k]}`;
   if (a?.g) {
+    state.focus = { g: a.g };
     text += ` · g.${a.g}`;
     if (state.ref.mapper) text += ` · c.${state.ref.mapper.c(a.g)}`;
-    text += ` · génome ${a.genome} · allèle 1 ${a.a1} · allèle 2 ${a.a2}`;
-  } else if (k < r.trim[0] || k >= r.trim[1]) {
+    text += ` · génome ${a.genome} · allèle 1 ${a.a1} · allèle 2 ${a.a2}${view.disp.flipped ? ' (sens du gène)' : r.strand === '-' ? ' (brin −)' : ''}`;
+  } else if (o < r.trim[0] || o >= r.trim[1]) {
     text += ' · hors de la zone analysée (extrémité de lecture)';
   }
   setStatus('baseInfo', text);
 }
 
-$('traceRead').addEventListener('change', e => showTrace(Number(e.target.value)));
+// Changement de lecture : on garde la position suivie (variant cliqué ou base sélectionnée) et l'on
+// retient le brin choisi pour les prochains clics sur un variant.
+$('traceRead').addEventListener('change', e => {
+  const i = Number(e.target.value), r = state.results[i];
+  if (!r) return;
+  state.strandPref = r.strand;
+  const center = state.focus ? centerFor(r, state.focus.g) : null;
+  showTrace(i, center);
+  if (state.focus && center === null) setStatus('baseInfo', `${r.name} ne couvre pas la position suivie (${state.ref.mapper ? `c.${state.ref.mapper.c(state.focus.g)}` : `g.${state.focus.g}`}).`);
+});
+$('flipReverse').addEventListener('change', e => {
+  state.flipReverse = e.target.checked;
+  try { localStorage.setItem('janus.flip', state.flipReverse ? '1' : '0'); } catch { /* facultatif */ }
+  const r = view.result;
+  if (!r) return;
+  const center = state.focus ? centerFor(r, state.focus.g) : toOrig(r, Math.round(view.start + view.count / 2));
+  showTrace(state.results.indexOf(r), center);
+});
 $('zoomIn').addEventListener('click', () => view.zoom(0.6));
 $('zoomOut').addEventListener('click', () => view.zoom(1.6));
 $('zoomAll').addEventListener('click', () => view.read && view.show(0, view.read.bases.length));

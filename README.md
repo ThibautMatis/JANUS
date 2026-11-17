@@ -2,7 +2,7 @@
 
 # JANUS — *Joint Allele aNalysis Using Sanger*
 
-**v0.8.10 · 17 November 2026**
+**v0.8.11 · 17 November 2026**
 
 Web tool for variant calling on Sanger chromatograms (`.ab1`), inspired by Tracy (Rausch T et al. *BMC Genomics*. 2020;21:230. doi:10.1186/s12864-020-6635-8).
 

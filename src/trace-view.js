@@ -195,10 +195,11 @@ export class TraceView {
           });
         }
       }
-      if (col.k !== null && (col.k + 1) % step === 0) {
+      const num = col.k === null ? null : this.numberOf ? this.numberOf(col.k) : col.k + 1;
+      if (num !== null && num % step === 0) {
         ctx.font = '10px system-ui, sans-serif';
         ctx.fillStyle = muted;
-        ctx.fillText(String(col.k + 1), x, H - 10);
+        ctx.fillText(String(num), x, H - 10);
       }
     }
     if (this.box && rows && showLetters) this.drawBox(ctx, layout, perCol, yBase + labelH, rowH);

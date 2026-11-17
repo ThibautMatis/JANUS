@@ -156,3 +156,8 @@ textarea { font: inherit; color: inherit; background: var(--card); width: 100%; 
 #readTable th.col-check { min-width: 230px; }
 #readTable td.read-region { white-space: normal; min-width: 160px; }
 #readTable th.col-variants { min-width: 170px; }
+
+/* Sens d'affichage d'une lecture Reverse : mention discrète + case à cocher. */
+.flip-toggle { display: inline-flex; align-items: center; gap: 6px; font-weight: 400; font-size: 13px; color: var(--muted); cursor: pointer; }
+.flip-toggle input { margin: 0; }
+.strand-note { margin: 0 0 6px; font-size: 12.5px; color: var(--muted); }
