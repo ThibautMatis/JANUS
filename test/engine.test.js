@@ -282,3 +282,21 @@ test('polymorphisme en cis à 2 nt d’une délétion (type MSH6 c.3968T>G + c.3
     }
   }
 });
+
+test('substitution vue seulement dans la zone décalée de la Reverse, T net sur la Forward (cas MSH6) : écartée', () => {
+  const ctx = 'AAGGGACATAGAAAAGCAAGAGAATTTGAGAAGATGAATCAGTCACTACGATTATTTCGGTAA';
+  const s0 = randomSeq(6000, rng(41));
+  const seq = s0.slice(0, 2279) + ctx + s0.slice(2279 + ctx.length);
+  const ref = buildReference({ accession: 'NG_S.1', seq });
+  const p = 2279 + ctx.indexOf('TTGAGAAGATGAA');
+  const wt = seq.slice(1849, 2650), at = i => i - 1849;
+  const del = wt.slice(0, at(p + 3)) + wt.slice(at(p + 13));
+  const withG = del.slice(0, at(p)) + 'G' + del.slice(at(p) + 1);
+  for (const seed of [2, 3, 4]) {
+    const F = simulate([wt.slice(30), del.slice(30)], [0.5, 0.5], { length: 650, seed });
+    const R = simulate([revcomp(wt).slice(30), revcomp(withG).slice(30)], [0.5, 0.5], { length: 650, seed: seed + 50 });
+    F.name = 'F'; R.name = 'R';
+    const merged = mergeCalls([F, R].map(r => analyzeRead(r, ref)), ref);
+    assert.deepEqual(merged.map(m => `${m.names.g.split(':')[1]} ${m.status}`), [`g.${p + 4}_${p + 13}del confirmé F/R`]);
+  }
+});
