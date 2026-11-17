@@ -836,7 +836,7 @@ export function mergeCalls(results, ref = null) {
 
   if (ref) resolveRepeatRegions(merged, results, ref);
   if (ref) joinNeighbours(merged, ref);
-  if (ref) splitNeighbours(merged, ref);
+  if (ref) splitNeighbours(merged, results, ref);
 
   const out = [];
   for (const m of merged.values()) {
@@ -936,26 +936,51 @@ function splitSnvFromIndel(v) {
   return null;
 }
 
-function splitNeighbours(merged, ref) {
+function splitNeighbours(merged, results, ref) {
   const seq = ref.seq;
+  const usable = results.filter(r => r.explain && r.quality?.verdict !== 'illisible');
   for (const m of [...merged.values()]) {
     if (m.type !== 'delins') continue;
     const parts = splitSnvFromIndel(m);
     if (!parts) continue;
     const vs = parts.map(x => normalize(seq, x));
     if (vs.some(x => !x.del.length && !x.ins.length)) continue;
+    const snv = vs.find(x => x.type === 'snv'), indel = vs.find(x => x !== snv);
+    if (!snv || !indel) continue;
     merged.delete(m.key);
-    const names = vs.map(x => hgvsNames(x, ref));
-    vs.forEach((x, n) => {
-      const other = names[1 - n].g.split(':')[1];
-      const key = variantKey(x);
-      merged.set(key, {
-        ...m, ...x, key, names: names[n],
-        reads: m.reads.map(r => ({ ...r, flags: [...(r.flags || []), `en cis (même allèle) avec ${other}`] })),
-        strands: new Set(m.strands), supportedBy: [...m.supportedBy], resolvedBy: new Set(m.resolvedBy || []),
-        cis: other,
-      });
+    // La substitution n'est pas prise sur parole : elle doit se voir sur une lecture où sa position est
+    // « propre », c'est-à-dire lue AVANT l'indel dans le sens de lecture (Forward : en amont ; Reverse : en
+    // aval). Après l'indel, les deux allèles sont décalés et superposés : un léger écart de hauteur de pic
+    // peut y faire préférer à tort « indel + une base changée » (cas MSH6 : c.3968T>G inventé sur la Reverse,
+    // alors que la Forward montre un T seul).
+    const before = r => (r.strand === '+' ? snv.pos < indel.pos : snv.pos >= indel.pos + indel.del.length);
+    const clean = usable.filter(r => before(r) && r.refStart + 5 <= snv.pos + 1 && r.refEnd - 5 >= snv.pos + 1);
+    const gains = new Map(clean.map(r => [r, modelSupport(r, snv, seq)]));
+    const seen = clean.filter(r => (gains.get(r) ?? -Infinity) >= 2);
+    const names = { snv: hgvsNames(snv, ref), indel: hgvsNames(indel, ref) };
+    const sg = names.snv.g.split(':')[1], ig = names.indel.g.split(':')[1];
+    const copy = (x, extra) => ({
+      ...m, ...x, key: variantKey(x), names: x === snv ? names.snv : names.indel,
+      reads: m.reads.map(r => ({ ...r, flags: [...(r.flags || []), extra] })),
+      strands: new Set(m.strands), supportedBy: [...m.supportedBy], resolvedBy: new Set(m.resolvedBy || []),
     });
+    if (clean.length && !seen.length) {
+      // Contredite là où elle devrait se voir nettement : écartée, l'indel reste seul.
+      const why = clean.map(r => r.name).join(', ');
+      merged.set(variantKey(indel), copy(indel, `écriture ${m.names.g.split(':')[1]} écartée : ${sg} absent sur ${why}, où cette position est lue avant l'indel`));
+      continue;
+    }
+    merged.set(variantKey(indel), { ...copy(indel, `en cis (même allèle) avec ${sg}`), cis: sg });
+    // La substitution n'est « appelée » que par les lectures qui la montrent ; les autres sont réévaluées
+    // ensuite comme pour tout variant (soutien par modélisation, ou non retrouvé).
+    const e = copy(snv, `en cis (même allèle) avec ${ig}`);
+    if (clean.length) {
+      e.reads = e.reads.filter(x => seen.includes(x.result));
+      e.strands = new Set(e.reads.map(x => x.strand));
+      e.resolvedBy = new Set();
+    }
+    e.cis = ig;
+    merged.set(e.key, e);
   }
 }
 
