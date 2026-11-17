@@ -35,7 +35,6 @@ export const DEFAULTS = {
   scanMinConcordance: 0.6, // part des pics mixtes expliqués par la séquence décalée
   delinsMaxInsert: 12, // bases insérées maximales testées pour une délétion-insertion
   delinsMinGain: 2,   // gain d'ajustement minimal d'une délétion-insertion sur l'indel simple de même bilan
-  delinsGainPerBase: 0, // gain supplémentaire exigé par base insérée (plus de bases = plus de liberté d'ajustement)
 };
 
 const h = (x, base) => x.h[DNA.indexOf(base)] ?? 0;
@@ -539,7 +538,7 @@ function refitIndels(calls, { ref, winStart, seqCols, prof, reverse, opt, model 
         for (const c of cands) if (c.ins !== null && !c.ins.includes('N')) simple = Math.max(simple, fit([normalize(seq, c)], from, to));
       }
       const di = delinsSearch(lo, hi, delta, [], from, to);
-      if (di && di.score > simple + opt.delinsMinGain + opt.delinsGainPerBase * di.v.ins.length) v = di.v;
+      if (di && di.score > simple + opt.delinsMinGain) v = di.v;
     }
     // Les appels de l'allèle 2 qui chevauchent l'indel trouvé en sont des fragments.
     for (const c of [...calls.values()]) {
@@ -609,7 +608,7 @@ function refitIndels(calls, { ref, winStart, seqCols, prof, reverse, opt, model 
       }
     }
     const di = delinsSearch(lo, hi, delta, others, from, to);
-    if (di && di.score > best.score + opt.delinsMinGain + opt.delinsGainPerBase * di.v.ins.length) best = { vars: [di.v], score: di.score };
+    if (di && di.score > best.score + opt.delinsMinGain) best = { vars: [di.v], score: di.score };
     if (best.original) { kept.push(...cluster); continue; }
     for (const c of cluster) calls.delete(c.key);
     for (const v of best.vars) kept.push(addCall(v));
