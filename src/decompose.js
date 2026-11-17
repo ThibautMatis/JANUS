@@ -811,6 +811,7 @@ export function mergeCalls(results, ref = null) {
 
   if (ref) resolveRepeatRegions(merged, results, ref);
   if (ref) joinNeighbours(merged, ref);
+  if (ref) splitNeighbours(merged, ref);
 
   const out = [];
   for (const m of merged.values()) {
@@ -835,9 +836,10 @@ export function mergeCalls(results, ref = null) {
 }
 
 /**
- * Événements hétérozygotes du même allèle séparés par au plus 2 nt : décrits ensemble par une seule
- * délétion-insertion (convention HGVS ; ex. c.1885_1890del + c.1891C>T, ou deux substitutions
- * contiguës). La séparation des allèles les place tous sur l'allèle 2.
+ * Événements hétérozygotes du même allèle et contigus (aucune base intacte entre eux) : décrits ensemble
+ * par une seule délétion-insertion (HGVS ; ex. deux substitutions voisines c.100A>T + c.101C>G →
+ * c.100_101delinsTG). Des événements séparés par au moins une base intacte restent décrits séparément
+ * (ex. un polymorphisme en cis à 2 nt d'une délétion : splitNeighbours).
  */
 function joinNeighbours(merged, ref) {
   const seq = ref.seq;
@@ -847,7 +849,7 @@ function joinNeighbours(merged, ref) {
   const groups = [];
   for (const m of list) {
     const g = groups.at(-1);
-    if (g && m.pos - Math.max(...g.map(end)) <= 2 && m.pos >= Math.max(...g.map(end))) g.push(m);
+    if (g && m.pos === Math.max(...g.map(end))) g.push(m);
     else groups.push([m]);
   }
   for (const g of groups) {
@@ -873,6 +875,62 @@ function joinNeighbours(merged, ref) {
     // Une lecture qui appelle l'ensemble ne le « soutient » pas en plus.
     entry.supportedBy = entry.supportedBy.filter(x => !entry.reads.some(w => w.name === x.name));
     merged.set(key, entry);
+  }
+}
+
+/**
+ * Délétion-insertion qui s'écrit exactement comme UN indel simple + UNE substitution séparés par au
+ * moins une base intacte (ex. MSH6 c.3968_3980delinsGTG = c.3968T>G + c.3971_3980del) : décrite par
+ * ces deux événements, en cis. La substitution est souvent un polymorphisme connu, et l'indel doit
+ * garder le nom sous lequel il figure dans les bases de données et la littérature.
+ */
+function splitSnvFromIndel(v) {
+  const seg = v.del, alt = v.ins, d = seg.length, k = alt.length, L = Math.abs(d - k);
+  if (!L || !d) return null;
+  for (let i = 0; i < d; i++) {
+    for (const b of DNA) {
+      if (b === seg[i]) continue;
+      const s2 = seg.slice(0, i) + b + seg.slice(i + 1);
+      if (d > k) {
+        for (let j = 0; j + L <= d; j++) {
+          if ((i < j ? j - i - 1 : i - (j + L)) < 1) continue; // au moins une base intacte entre les deux
+          if (s2.slice(0, j) + s2.slice(j + L) === alt) {
+            return [{ pos: v.pos + i, del: seg[i], ins: b }, { pos: v.pos + j, del: seg.slice(j, j + L), ins: '' }];
+          }
+        }
+      } else {
+        for (let j = 0; j <= d; j++) {
+          if ((i < j ? j - 1 - i : i - j) < 1) continue;
+          if (alt.slice(0, j) === s2.slice(0, j) && alt.slice(j + L) === s2.slice(j)) {
+            return [{ pos: v.pos + i, del: seg[i], ins: b }, { pos: v.pos + j, del: '', ins: alt.slice(j, j + L) }];
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function splitNeighbours(merged, ref) {
+  const seq = ref.seq;
+  for (const m of [...merged.values()]) {
+    if (m.type !== 'delins') continue;
+    const parts = splitSnvFromIndel(m);
+    if (!parts) continue;
+    const vs = parts.map(x => normalize(seq, x));
+    if (vs.some(x => !x.del.length && !x.ins.length)) continue;
+    merged.delete(m.key);
+    const names = vs.map(x => hgvsNames(x, ref));
+    vs.forEach((x, n) => {
+      const other = names[1 - n].g.split(':')[1];
+      const key = variantKey(x);
+      merged.set(key, {
+        ...m, ...x, key, names: names[n],
+        reads: m.reads.map(r => ({ ...r, flags: [...(r.flags || []), `en cis (même allèle) avec ${other}`] })),
+        strands: new Set(m.strands), supportedBy: [...m.supportedBy], resolvedBy: new Set(m.resolvedBy || []),
+        cis: other,
+      });
+    });
   }
 }
 

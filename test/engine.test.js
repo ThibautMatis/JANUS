@@ -262,3 +262,23 @@ test('deux substitutions contiguës sur le même allèle : décrites par une dé
   const { merged } = run([{ g, del: 1, ins: x }, { g: g + 1, del: 1, ins: y }]);
   assert.deepEqual(merged.map(m => m.names.c.split(':')[1]), [`c.${cOf(g)}_${cOf(g + 1)}delins${x}${y}`]);
 });
+
+test('polymorphisme en cis à 2 nt d’une délétion (type MSH6 c.3968T>G + c.3971_3980del) : deux variants, pas de delins', () => {
+  const ctx = 'AAGGGACATAGAAAAGCAAGAGAATTTGAGAAGATGAATCAGTCACTACGATTATTTCGGTAA';
+  const s0 = randomSeq(6000, rng(41));
+  const seq = s0.slice(0, 2279) + ctx + s0.slice(2279 + ctx.length);
+  const ref = buildReference({ accession: 'NG_S.1', seq });
+  const p = 2279 + ctx.indexOf('TTGAGAAGATGAA'); // 0-based : le T substitué
+  const wt = seq.slice(1849, 2650), at = i => i - 1849;
+  const del = wt.slice(0, at(p + 3)) + wt.slice(at(p + 13));
+  const both = del.slice(0, at(p)) + 'G' + del.slice(at(p) + 1);
+  for (const [mut, expected] of [[del, [`g.${p + 4}_${p + 13}del`]], [both, [`g.${p + 1}T>G`, `g.${p + 4}_${p + 13}del`]]]) {
+    for (const seed of [1, 2]) {
+      const F = simulate([wt.slice(30), mut.slice(30)], [0.5, 0.5], { length: 650, seed });
+      const R = simulate([revcomp(wt).slice(30), revcomp(mut).slice(30)], [0.5, 0.5], { length: 650, seed: seed + 50 });
+      F.name = 'F'; R.name = 'R';
+      const merged = mergeCalls([F, R].map(r => analyzeRead(r, ref)), ref);
+      assert.deepEqual(merged.map(m => `${m.names.g.split(':')[1]} ${m.status}`), expected.map(e => `${e} confirmé F/R`));
+    }
+  }
+});
