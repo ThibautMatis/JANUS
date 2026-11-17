@@ -964,7 +964,9 @@ function splitNeighbours(merged, results, ref) {
     };
     const gains = new Map(covering.map(r => [r, gainOf(r)]));
     const clean = covering.filter(before);
-    const seen = clean.filter(r => gains.get(r) >= 2);
+    // Contredite = le modèle s'ajuste nettement moins bien avec elle (gain < −1) sur toutes les lectures où
+    // elle devrait se voir ; un vrai SNP y donne un gain positif, même faible (une seule colonne en jeu).
+    const contradicted = clean.length > 0 && clean.every(r => gains.get(r) < -1);
     const names = { snv: hgvsNames(snv, ref), indel: hgvsNames(indel, ref) };
     const sg = names.snv.g.split(':')[1], ig = names.indel.g.split(':')[1];
     const copy = (x, extra) => ({
@@ -972,7 +974,7 @@ function splitNeighbours(merged, results, ref) {
       reads: m.reads.map(r => ({ ...r, flags: [...(r.flags || []), extra] })),
       strands: new Set(m.strands), supportedBy: [...m.supportedBy], resolvedBy: new Set(m.resolvedBy || []),
     });
-    if (clean.length && !seen.length) {
+    if (contradicted) {
       // Contredite là où elle devrait se voir nettement : écartée, l'indel reste seul.
       const why = clean.map(r => r.name).join(', ');
       merged.set(variantKey(indel), copy(indel, `écriture ${m.names.g.split(':')[1]} écartée : ${sg} absent sur ${why}, où cette position est lue avant l'indel`));
@@ -983,7 +985,7 @@ function splitNeighbours(merged, results, ref) {
     // ensuite comme pour tout variant (soutien par modélisation, ou non retrouvé).
     const e = copy(snv, `en cis (même allèle) avec ${ig}`);
     if (covering.length) {
-      const shows = covering.filter(r => gains.get(r) >= 2);
+      const shows = covering.filter(r => gains.get(r) > 0);
       e.reads = e.reads.filter(x => shows.includes(x.result));
       e.supportedBy = shows.filter(r => !e.reads.some(x => x.result === r)).map(r => ({ name: r.name, strand: r.strand, gain: gains.get(r) }));
       e.strands = new Set([...e.reads.map(x => x.strand), ...e.supportedBy.map(x => x.strand)]);
