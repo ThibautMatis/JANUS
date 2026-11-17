@@ -33,7 +33,9 @@ export const DEFAULTS = {
   maxInsertion: 40,   // taille maximale des insertions recherchées (nt)
   scanMinGain: 20,    // gain d'ajustement minimal pour retenir un indel trouvé par recherche du décalage
   scanMinConcordance: 0.6, // part des pics mixtes expliqués par la séquence décalée
+  delinsMaxInsert: 12, // bases insérées maximales testées pour une délétion-insertion
   delinsMinGain: 2,   // gain d'ajustement minimal d'une délétion-insertion sur l'indel simple de même bilan
+  delinsGainPerBase: 0, // gain supplémentaire exigé par base insérée (plus de bases = plus de liberté d'ajustement)
 };
 
 const h = (x, base) => x.h[DNA.indexOf(base)] ?? 0;
@@ -488,14 +490,16 @@ function refitIndels(calls, { ref, winStart, seqCols, prof, reverse, opt, model 
   const addCall = v => {
     const key = variantKey(v);
     // Une substitution doit garder sa colonne (profil de pics) pour être évaluée ensuite.
-    const cols = v.type === 'snv' ? seqCols.filter(c => c.t !== null && c.t + winStart === v.pos) : [];
+    const colAt = g => seqCols.find(c => c.t !== null && c.t + winStart === g);
+    const cols = v.type === 'snv' ? seqCols.filter(c => c.t !== null && c.t + winStart === v.pos)
+      : v.del.length === v.ins.length ? [...v.del].map((_, i) => colAt(v.pos + i)) : [];
     const call = { ...v, key, alleles: [2], cols, refit: true, qFirst: nearestCol(v.pos), qAfter: nearestCol(v.pos + v.del.length) };
     calls.set(key, call);
     return call;
   };
 
   /**
-   * Meilleure délétion-insertion de bilan `delta` autour de [lo, hi) : k bases (1 à 4) lues dans le
+   * Meilleure délétion-insertion de bilan `delta` autour de [lo, hi) : k bases (1 à delinsMaxInsert) lues dans le
    * signal de l'allèle 2 remplacent k − delta bases de la référence. Ex. BRCA1 c.1885_1893delinsTCT
    * (9 nt remplacés par 3), qui ressemble à une délétion de 6 nt suivie d'une substitution, mais dont
    * seules les bases TCT expliquent l'allèle 2.
@@ -503,7 +507,7 @@ function refitIndels(calls, { ref, winStart, seqCols, prof, reverse, opt, model 
   const delinsSearch = (lo, hi, delta, others, from, to) => {
     let best = null;
     for (let p = Math.max(A + 1, lo - 8); p <= Math.min(B - 1, hi + 8); p++) {
-      for (let k = 1; k <= 4; k++) {
+      for (let k = 1; k <= opt.delinsMaxInsert; k++) {
         const d = k - delta; // bases supprimées
         if (d < 1 || p + d > B) continue;
         const ins = inferBases(p, k, delta);
@@ -535,7 +539,7 @@ function refitIndels(calls, { ref, winStart, seqCols, prof, reverse, opt, model 
         for (const c of cands) if (c.ins !== null && !c.ins.includes('N')) simple = Math.max(simple, fit([normalize(seq, c)], from, to));
       }
       const di = delinsSearch(lo, hi, delta, [], from, to);
-      if (di && di.score > simple + opt.delinsMinGain) v = di.v;
+      if (di && di.score > simple + opt.delinsMinGain + opt.delinsGainPerBase * di.v.ins.length) v = di.v;
     }
     // Les appels de l'allèle 2 qui chevauchent l'indel trouvé en sont des fragments.
     for (const c of [...calls.values()]) {
@@ -605,7 +609,7 @@ function refitIndels(calls, { ref, winStart, seqCols, prof, reverse, opt, model 
       }
     }
     const di = delinsSearch(lo, hi, delta, others, from, to);
-    if (di && di.score > best.score + opt.delinsMinGain) best = { vars: [di.v], score: di.score };
+    if (di && di.score > best.score + opt.delinsMinGain + opt.delinsGainPerBase * di.v.ins.length) best = { vars: [di.v], score: di.score };
     if (best.original) { kept.push(...cluster); continue; }
     for (const c of cluster) calls.delete(c.key);
     for (const v of best.vars) kept.push(addCall(v));
@@ -669,6 +673,28 @@ function assess(call, seqCols, prof, opt, reverse) {
       if ([seqCols[i - 1], seqCols[i + 1]].some(c => c?.a1 === call.ins) && x.ratio < 0.6) out.flags.push('même base que le pic voisin (traînée possible)');
     }
     out.evidence = `rapport des pics ${x.ratio.toFixed(2)}`;
+    return out;
+  }
+
+  // Délétion-insertion de même longueur (substitutions contiguës) : rien n'est décalé, chaque base
+  // changée se juge comme une substitution (double pic net au-dessus du bruit de fond).
+  if (call.type === 'delins' && call.del.length === call.ins.length) {
+    const fr = [];
+    for (let i = 0; i < call.del.length; i++) {
+      if (call.del[i] === call.ins[i]) continue;
+      const col = call.cols[i];
+      if (!col) return null;
+      const x = prof[col.q], alt = h(x, call.ins[i]), wt = h(x, call.del[i]);
+      if (!both) {
+        if (!col.mixed) return null;
+        const near = prof.slice(Math.max(0, col.q - 10), col.q + 11).map(y => y.h.slice().sort((a, b) => b - a)[2]).sort((a, b) => a - b);
+        if (Math.min(alt, wt) < opt.snrMin * (near[Math.floor(near.length / 2)] || 0)) return null;
+      }
+      fr.push(alt / Math.max(1, alt + wt));
+    }
+    if (!fr.length) return null;
+    out.alleleFraction = fr.reduce((a, b) => a + b, 0) / fr.length;
+    out.evidence = `${fr.length} double(s) pic(s) contigu(s)`;
     return out;
   }
 
