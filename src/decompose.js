@@ -861,29 +861,51 @@ export function mergeCalls(results, ref = null) {
 }
 
 /**
- * Événements hétérozygotes du même allèle et contigus (aucune base intacte entre eux) : décrits ensemble
- * par une seule délétion-insertion (HGVS ; ex. deux substitutions voisines c.100A>T + c.101C>G →
- * c.100_101delinsTG). Des événements séparés par au moins une base intacte restent décrits séparément
- * (ex. un polymorphisme en cis à 2 nt d'une délétion : splitNeighbours).
+ * Événements hétérozygotes voisins du même allèle, décrits ensemble quand c'est plus juste : contigus
+ * (aucune base intacte entre eux) → une délétion-insertion (HGVS ; ex. c.100A>T + c.101C>G →
+ * c.100_101delinsTG) ; ou équivalents à un seul variant simple → ce variant. Des événements séparés par
+ * au moins une base intacte et sans écriture simple commune restent décrits séparément (ex. un
+ * polymorphisme en cis à 2 nt d'une délétion : splitNeighbours).
  */
 function joinNeighbours(merged, ref) {
   const seq = ref.seq;
   const het = m => m.reads.every(x => x.genotype === 'hétérozygote') && (m.reads.length || m.supportedBy.length);
   const end = m => m.pos + m.del.length;
   const list = [...merged.values()].filter(het).sort((a, b) => a.pos - b.pos);
-  const groups = [];
-  for (const m of list) {
-    const g = groups.at(-1);
-    if (g && m.pos === Math.max(...g.map(end))) g.push(m);
-    else groups.push([m]);
-  }
-  for (const g of groups) {
-    if (g.length < 2) continue;
+  // Écriture combinée d'un groupe d'événements (même allèle) : variant normalisé, ou null.
+  const combine = g => {
     const from = g[0].pos, to = Math.max(...g.map(end));
     const hap = applyVariants(seq, g, from, to);
-    if (hap === null) continue;
+    if (hap === null) return null;
     const v = normalize(seq, { pos: from, del: seq.slice(from, to), ins: hap });
-    if (!v.del.length && !v.ins.length) continue;
+    return v.del.length || v.ins.length ? v : null;
+  };
+  // Groupes d'événements voisins (au plus 10 nt entre eux). Un groupe est réuni s'il est contigu (→
+  // délétion-insertion, HGVS), ou si, ensemble, ses événements ne sont qu'UN variant simple — substitution,
+  // délétion, insertion ou duplication : la description la plus simple de l'allèle l'emporte (ex. BRCA2
+  // c.6405C>A + c.6407_6411del = c.6405_6409del). Sinon, chacun reste décrit séparément.
+  const near = [];
+  for (const m of list) {
+    const g = near.at(-1);
+    if (g && m.pos >= Math.max(...g.map(end)) && m.pos - Math.max(...g.map(end)) <= 10) g.push(m);
+    else near.push([m]);
+  }
+  const groups = [];
+  for (const g of near) {
+    let i = 0;
+    while (i < g.length) {
+      // Plus long groupe à partir de i qui se réunit ; à défaut, l'événement reste seul.
+      let taken = 1, v = null;
+      for (let j = g.length; j > i + 1; j--) {
+        const sub = g.slice(i, j), c = combine(sub);
+        const contiguous = sub.every((m, k) => k === 0 || m.pos === end(sub[k - 1]));
+        if (c && (contiguous || c.type !== 'delins')) { taken = j - i; v = c; break; }
+      }
+      if (v) groups.push({ g: g.slice(i, i + taken), v });
+      i += taken;
+    }
+  }
+  for (const { g, v } of groups) {
     const template = g.find(m => m.type !== 'snv') || g[0];
     const key = variantKey(v);
     const entry = {
@@ -1099,3 +1121,4 @@ function resolveRepeatRegions(merged, results, ref) {
     }
   }
 }
+export { joinNeighbours as _joinNeighbours }; // pour les tests

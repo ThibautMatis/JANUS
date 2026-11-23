@@ -234,6 +234,35 @@ function centerFor(result, g) {
   return best <= 2 ? center : null;
 }
 
+/**
+ * Variants appelés (au plus 3, à moins de 20 nt) qui, ensemble, donnent exactement l'allèle du variant v ;
+ * null sinon.
+ */
+function equivalentCalls(v) {
+  const seq = state.ref.seq, A = v.pos - 40, B = v.pos + v.del.length + 40;
+  const apply = vars => {
+    let out = '', cur = A;
+    for (const x of [...vars].sort((a, b) => a.pos - b.pos)) {
+      if (x.pos < cur || x.pos + x.del.length > B) return null;
+      out += seq.slice(cur, x.pos) + x.ins;
+      cur = x.pos + x.del.length;
+    }
+    return out + seq.slice(cur, B);
+  };
+  const target = apply([v]);
+  const near = state.merged.filter(m => m.pos + m.del.length >= v.pos - 20 && m.pos <= v.pos + v.del.length + 20);
+  for (let size = 1; size <= Math.min(3, near.length); size++) {
+    const pick = (start, acc) => {
+      if (acc.length === size) return apply(acc) === target ? acc : null;
+      for (let i = start; i < near.length; i++) { const r = pick(i + 1, [...acc, near[i]]); if (r) return r; }
+      return null;
+    };
+    const found = pick(0, []);
+    if (found) return found;
+  }
+  return null;
+}
+
 function evaluateSought() {
   const text = $('sought').value.trim();
   state.sought = null;
@@ -246,6 +275,11 @@ function evaluateSought() {
   const s = { variant: v, transcript: parsed.transcript, found: null, near: null, reads: [] };
   if (state.results.length) {
     s.found = state.merged.find(m => m.key === v.key) || null;
+    // Même allèle décrit autrement (ex. c.6405C>A + c.6407_6411del au lieu de c.6405_6409del) : trouvé.
+    if (!s.found) {
+      const group = equivalentCalls(v);
+      if (group) { s.found = group.find(m => m.type !== 'snv') || group[0]; s.foundAs = group; }
+    }
     // Indel de même bilan à quelques bases : probablement le même événement, nommé autrement.
     const net = x => x.ins.length - x.del.length;
     if (!s.found && v.type !== 'snv') s.near = state.merged.find(m => m.type !== 'snv' && net(m) === net(v) && Math.abs(m.pos - v.pos) <= 10) || null;
@@ -291,6 +325,9 @@ function renderSought() {
   if (s.found) {
     const fr = s.found.reads.map(x => x.alleleFraction).filter(Number.isFinite).map(f => `${Math.round(100 * f)} %`).join(' / ');
     lines.push(el('li', {}, `${s.found.genotype}${fr ? `, fraction ${fr}` : ''}`));
+    if (s.foundAs && (s.foundAs.length > 1 || s.foundAs[0].key !== s.variant.key)) {
+      lines.push(el('li', {}, `même allèle, décrit dans le tableau comme : ${s.foundAs.map(m => m.names.c || m.names.g).join(' + ')}`));
+    }
   }
   if (s.near) lines.push(el('li', {}, `≈ indel de même taille appelé à proximité : ${s.near.names.c || s.near.names.g} — vérifier s’il s’agit du même événement décrit autrement.`));
   for (const x of s.reads) {
@@ -826,7 +863,7 @@ function el(tag, props = {}, ...children) {
 
 /** Nouvelle analyse : variants confirmés F/R cochés par défaut, à classer. */
 function resetReport() {
-  report.choices = new Map(state.merged.map(v => [v.key, { checked: v.status === 'confirmé F/R' || state.sought?.found === v, classId: '' }]));
+  report.choices = new Map(state.merged.map(v => [v.key, { checked: v.status === 'confirmé F/R' || (state.sought?.foundAs ?? [state.sought?.found]).includes(v), classId: '' }]));
   report.edited = false;
   report.images = new Map();
   renderReportTable();
