@@ -178,11 +178,20 @@ $('loadRefFile').addEventListener('click', async () => {
 // ---------------------------------------------------------------------------
 // 2. Analyse
 
-const options = () => ({
-  ratio: Number($('optRatio').value) || 0.25,
-  minSignal: Number($('optSignal').value) || 0.08,
-  snrMin: Number($('optSnr').value) || 4,
-});
+// Paramètres réglables : valeur par défaut, libellé, et plage au-delà de laquelle l'analyse se dégrade.
+const PARAMS = [
+  { id: 'optRatio', key: 'ratio', def: 0.25, label: 'rapport secondaire / primaire', max: 0.35,
+    why: 'au-dessus de 0,35, une partie des vrais doubles pics d’un hétérozygote n’est plus vue (risque d’indel mal nommé)' },
+  { id: 'optSignal', key: 'minSignal', def: 0.08, label: 'signal minimal de l’allèle 2' },
+  { id: 'optSnr', key: 'snrMin', def: 4, label: 'rapport signal / bruit d’un SNV' },
+];
+const options = () => Object.fromEntries(PARAMS.map(x => [x.key, Number($(x.id).value) || x.def]));
+/** Paramètres différents des valeurs par défaut (affichés dans la page et le rapport). */
+function changedParams() {
+  const o = options();
+  return PARAMS.filter(x => o[x.key] !== x.def).map(x => ({ ...x, value: o[x.key], risky: x.max !== undefined && o[x.key] > x.max }));
+}
+const paramText = list => list.map(x => `${x.label} ${String(x.value).replace('.', ',')} (défaut ${String(x.def).replace('.', ',')})`).join(', ');
 
 $('analyze').addEventListener('click', async () => {
   const files = [...$('abFiles').files];
@@ -375,6 +384,8 @@ function readSummary() {
     if (!ok) lines.push(`⚠ Aucune lecture ${label} exploitable${bad.length ? ` (${bad.join(', ')} illisible)` : ''} : les variants ne pourront pas être confirmés sur les deux brins.`);
   }
   for (const f of state.failed) lines.push(`⚠ ${f.name} : illisible — ${f.reason}`);
+  const changed = changedParams();
+  if (changed.length) lines.push(`⚠ Paramètres modifiés : ${paramText(changed)}.${changed.filter(x => x.risky).map(x => ` Attention : ${x.why}.`).join('')}`);
   return lines.join('\n');
 }
 
@@ -1051,7 +1062,7 @@ function renderReportPreview() {
     ...soughtSection(),
     el('h2', {}, selected.length > 1 ? 'Variants retenus' : 'Variant retenu'),
     ...variants,
-    el('p', { class: 'disclaimer' }, `Analyse réalisée avec ${NAME} ${releaseLabel()} (déconvolution d’allèles de chromatogrammes Sanger, méthode inspirée de Tracy, Rausch et al., BMC Genomics 2020), outil de recherche non validé pour le diagnostic. Les nomenclatures p. sont prédites. Tout variant doit être confirmé visuellement sur le chromatogramme et par une méthode validée ; l’absence de variant détecté n’exclut pas un variant non détectable par cette méthode (mosaïque, grande délétion, allèle non amplifié).`),
+    el('p', { class: 'disclaimer' }, `Analyse réalisée avec ${NAME} ${releaseLabel()} (déconvolution d’allèles de chromatogrammes Sanger, méthode inspirée de Tracy, Rausch et al., BMC Genomics 2020), outil de recherche non validé pour le diagnostic.${changedParams().length ? ` Paramètres modifiés : ${paramText(changedParams())}.` : ' Paramètres par défaut.'} Les nomenclatures p. sont prédites. Tout variant doit être confirmé visuellement sur le chromatogramme et par une méthode validée ; l’absence de variant détecté n’exclut pas un variant non détectable par cette méthode (mosaïque, grande délétion, allèle non amplifié).`),
   );
 }
 

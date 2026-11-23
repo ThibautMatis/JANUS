@@ -63,10 +63,11 @@
       </div>
       <details>
         <summary>Paramètres</summary>
+        <p class="note">Valeurs par défaut validées sur le banc d’essai ; toute modification est signalée dans la page et dans le rapport. Le rapport secondaire / primaire ne doit pas dépasser 0,35 : au-delà, une partie des vrais doubles pics d’un hétérozygote n’est plus vue.</p>
         <div class="controls">
-          <label>Rapport secondaire / primaire minimal <input id="optRatio" type="number" min="0.05" max="0.9" step="0.05" value="0.25"></label>
-          <label>Signal minimal pour l’allèle 2 <input id="optSignal" type="number" min="0.02" max="0.5" step="0.01" value="0.08"></label>
-          <label>Rapport signal / bruit d’un SNV <input id="optSnr" type="number" min="1" max="20" step="0.5" value="4"></label>
+          <label>Rapport secondaire / primaire minimal <input id="optRatio" type="number" autocomplete="off" min="0.05" max="0.9" step="0.05" value="0.25"></label>
+          <label>Signal minimal pour l’allèle 2 <input id="optSignal" type="number" autocomplete="off" min="0.02" max="0.5" step="0.01" value="0.08"></label>
+          <label>Rapport signal / bruit d’un SNV <input id="optSnr" type="number" autocomplete="off" min="1" max="20" step="0.5" value="4"></label>
         </div>
       </details>
       <div id="readStatus" class="status" aria-live="polite">En attente de fichiers.</div>
