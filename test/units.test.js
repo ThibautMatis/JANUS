@@ -141,3 +141,26 @@ test('numérotation usuelle des exons de BRCA1 (pas d’exon 4)', async () => {
   assert.equal(other.exonNumbering, undefined);
   assert.equal(variantLocation({ pos: 75, del: 'A', ins: 'G' }, other.mapper), 'exon 4');
 });
+
+test('événements voisins équivalents à une seule délétion : réunis (type BRCA2 c.6405C>A + c.6407_6411del = c.6405_6409del)', async () => {
+  const { _joinNeighbours } = await import('../src/decompose.js');
+  const { buildReference } = await import('../src/reference.js');
+  const { normalize, variantKey, hgvsNames } = await import('../src/hgvs.js');
+  const seq = 'GGGCCCGAATTTAAATTATCAAATAACTTAAATGTTGAAGGTGGTTCGGGCCC';
+  const ref = buildReference({ accession: 'NG_X.1', seq });
+  const p = seq.indexOf('CTTAAATG');
+  const read = { name: 'F' };
+  const entry = raw => {
+    const v = normalize(seq, raw);
+    return { ...v, key: variantKey(v), names: hgvsNames(v, ref), reads: [{ name: 'F', strand: '+', genotype: 'hétérozygote', result: read, flags: [] }], supportedBy: [], strands: new Set(['+']) };
+  };
+  const a = entry({ pos: p, del: 'C', ins: 'A' }), b = entry({ pos: p + 2, del: seq.slice(p + 2, p + 7), ins: '' });
+  const merged = new Map([[a.key, a], [b.key, b]]);
+  _joinNeighbours(merged, ref);
+  assert.deepEqual([...merged.values()].map(m => m.names.g.split(':')[1]), [`g.${p + 1}_${p + 5}del`]);
+  // Un SNP en cis à 2 nt d'une délétion, sans écriture simple commune, reste séparé.
+  const c = entry({ pos: p, del: 'C', ins: 'G' });
+  const m2 = new Map([[c.key, c], [b.key, b]]);
+  _joinNeighbours(m2, ref);
+  assert.equal(m2.size, 2);
+});
